@@ -34,6 +34,20 @@ pub struct NonInclusionInp<'a, F: BigPrimeField> {
     newleafvalue: AssignedValue<F>,
     islargest: bool,
 }
+#[derive(Clone, Debug)]
+pub struct InsertLeafInp<'a, F: BigPrimeField> {
+    range: &'a RangeChip<F>,
+    old_root: AssignedValue<F>,
+    low_leaf: IdxLeaf<F>,
+    low_leaf_proof: Vec<AssignedValue<F>>,
+    low_leaf_proof_helper: Vec<AssignedValue<F>>,
+    new_root: AssignedValue<F>,
+    new_leaf: IdxLeaf<F>,
+    new_leaf_index: AssignedValue<F>,
+    new_leaf_proof: Vec<AssignedValue<F>>,
+    new_leaf_proof_helper: Vec<AssignedValue<F>>,
+    is_new_leaf_largest: bool,
+}
 pub fn verify_non_inclusion<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
     builder: &mut BaseCircuitBuilder<F>,
     input: NonInclusionInp<F>,
@@ -119,7 +133,7 @@ fn computemerkleroot<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
     siblings: Vec<AssignedValue<F>>,
     sib_idx: Vec<AssignedValue<F>>,
     range: &'a RangeChip<F>,
-) {
+) -> Result<AssignedValue<F>, Error> {
     let mut hash = leaf;
     let ctx = builder.main(0);
     let gate = range.gate();
@@ -131,6 +145,92 @@ fn computemerkleroot<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
         let inp = dual_mux(ctx, gate, &hash, &siblings[i], &sib_idx[i]);
         hash = hasher.hash_var_len_array(ctx, range, &inp, two);
     }
+    Ok(hash.clone())
+}
+
+pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
+    builder: &mut BaseCircuitBuilder<F>,
+    input: InsertLeafInp<F>,
+    make_public: &mut Vec<AssignedValue<F>>,
+) {
+    let non_inc_inp = NonInclusionInp {
+        range: input.range,
+        root: input.old_root.clone(),
+        lowleaf: input.low_leaf.clone(),
+        lowleafsib: input.low_leaf_proof.clone(),
+        lowleafidx: input.low_leaf_proof_helper.clone(),
+        newleafvalue: input.new_leaf.val.clone(),
+        islargest: input.is_new_leaf_largest.clone(),
+    };
+    verify_non_inclusion::<F, T, RATE>(builder, non_inc_inp);
+    let newlowleaf = IdxLeaf {
+        val: input.low_leaf.val,
+        next_idx: input.new_leaf_index,
+        next_val: input.low_leaf.next_val,
+    };
+
+    let spec = OptimizedPoseidonSpec::<F, T, RATE>::new::<8, 56, 0>();
+    let hasher = PoseidonHasher::<F, T, RATE>::new(spec);
+    let three = builder.main(0).load_constant(F::from(3u64));
+    let inp = [
+        newlowleaf.val.clone(),
+        newlowleaf.next_val.clone(),
+        newlowleaf.next_idx.clone(),
+    ];
+    let leaf_hash = hasher.hash_var_len_array(builder.main(0), input.range, &inp, three);
+
+    let zero = builder.main(0).load_constant(F::ZERO);
+    let intermimroot = computemerkleroot::<F, T, RATE>(
+        builder,
+        leaf_hash,
+        input.low_leaf_proof.clone(),
+        input.low_leaf_proof_helper.clone(),
+        input.range,
+    )
+    .unwrap();
+    let inp_ver = MerCirInput {
+        range: input.range,
+        root: &intermimroot,
+        leaf: &zero,
+        proof: &input.new_leaf_proof.clone(),
+        helper: &input.new_leaf_proof_helper.clone(),
+    };
+    assert_eq!(
+        verify_merkle_proof::<F, T, RATE>(builder, inp_ver, make_public)
+            .unwrap()
+            .value()
+            .clone(),
+        F::ONE
+    );
+    assert_eq!(
+        input.new_leaf.next_val.value().clone(),
+        input.low_leaf.next_val.value().clone()
+    );
+    assert_eq!(
+        input.new_leaf.next_idx.value().clone(),
+        input.low_leaf.next_idx.value().clone()
+    );
+
+    let inp2 = [
+        input.new_leaf.val.clone(),
+        input.new_leaf.next_val.clone(),
+        input.new_leaf.next_idx.clone(),
+    ];
+    let newleaf_hash = hasher.hash_var_len_array(builder.main(0), input.range, &inp2, three);
+
+    assert_eq!(
+        computemerkleroot::<F, T, RATE>(
+            builder,
+            newleaf_hash,
+            input.new_leaf_proof.clone(),
+            input.low_leaf_proof_helper.clone(),
+            input.range
+        )
+        .unwrap()
+        .value()
+        .clone(),
+        input.new_root.value().clone()
+    );
 }
 
 #[cfg(test)]
