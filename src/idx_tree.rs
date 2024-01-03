@@ -235,6 +235,95 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
 
 #[cfg(test)]
 mod test {
+    use ark_std::{end_timer, start_timer};
+    use halo2_base::{
+        gates::{circuit::{builder::BaseCircuitBuilder, BaseCircuitParams, CircuitBuilderStage},GateChip, RangeChip,RangeInstructions},
+        halo2_proofs::halo2curves::grumpkin::Fq as Fr,
+        utils::{fs::gen_srs, BigPrimeField},
+        AssignedValue,
+        halo2_proofs::{circuit::Value,halo2curves::bn256::Bn256},
+        poseidon::hasher::{spec::OptimizedPoseidonSpec, PoseidonHasher}
+    };
+    use serde::de::DeserializeOwned;
+    use snark_verifier_sdk::{
+        gen_pk,
+        halo2::{
+            aggregation::{AggregationCircuit, AggregationConfigParams, VerifierUniversality},
+            gen_snark_shplonk,
+        },
+        Snark, SHPLONK,
+    };
+    use crate::utils::run;
+
+    use super::insert_leaf;
+    use super::IdxLeaf;
+    const T:usize=3;
+    const RATE:usize=2;
+    const R_F: usize = 8;
+    const R_P: usize = 57;
+
+    fn merkle_help<F:BigPrimeField>(Leaves:Vec<AssignedValue<F>>, builder:&mut BaseCircuitBuilder<F>)->AssignedValue<F>{
+        let mut leaves=Leaves.clone();
+        while(leaves.len()>1){
+            let mut nxtlevel:Vec<AssignedValue<F>>=vec![];
+            for (i,_) in leaves.iter().enumerate().step_by(2){
+                let left=leaves[i];
+                let right =leaves[i+1];
+                let gate=GateChip::<F>::default();
+                let mut poseidon =
+                PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+                let ctx = builder.main(0);
+                poseidon.initialize_consts(ctx, &gate);
+                nxtlevel.push(poseidon.hash_fix_len_array(ctx, &gate, &[left,right]));
+            }
+            leaves=nxtlevel;
+        }
+        leaves[0]
+
+    }
+
     #[test]
-    fn test_merkle_verify() {}
+    fn test_insert_leaf() {
+        pub struct leaff<F:BigPrimeField>{
+            leaf:AssignedValue<F>
+        }
+        impl<F:BigPrimeField> leaff<F>{
+          pub fn test(){
+            let treesize =u32::pow(2,3);
+            let mut leaves:Vec<AssignedValue<F>>=vec![];
+           
+    
+            let mut builder=BaseCircuitBuilder::<F>::default();
+            let gate=GateChip::<F>::default();
+            let mut poseidon =
+            PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+            let ctx = builder.main(0);
+            poseidon.initialize_consts(ctx, &gate);
+            
+
+            let f_zero=ctx.load_constant(F::ZERO);
+            for i in 0..treesize{
+                if i==0{
+                    leaves.push(poseidon.hash_fix_len_array(ctx, &gate, &[f_zero,f_zero,f_zero]));
+                }
+                else{
+                    leaves.push(f_zero);
+                }
+            }
+            let newVal=ctx.load_constant(F::from_u128(69 as u128));
+
+            let old_root=merkle_help(leaves, &mut builder);
+            let lowleaf=IdxLeaf{
+                val:f_zero,
+                next_val:f_zero,
+                next_idx:f_zero
+            };
+          }
+            
+        }
+       
+
+
+
+    }
 }
