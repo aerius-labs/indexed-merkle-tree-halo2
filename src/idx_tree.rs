@@ -231,99 +231,207 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
         .clone(),
         input.new_root.value().clone()
     );
+
+    println!("---------------------");
 }
 
 #[cfg(test)]
 mod test {
     use ark_std::{end_timer, start_timer};
-    use halo2_base::{
-        gates::{circuit::{builder::BaseCircuitBuilder, BaseCircuitParams, CircuitBuilderStage},GateChip, RangeChip,RangeInstructions},
-        halo2_proofs::halo2curves::grumpkin::Fq as Fr,
-        utils::{fs::gen_srs, BigPrimeField},
-        AssignedValue,
-        halo2_proofs::{circuit::Value,halo2curves::bn256::Bn256},
-        poseidon::hasher::{spec::OptimizedPoseidonSpec, PoseidonHasher}
-    };
-    use serde::de::DeserializeOwned;
-    use snark_verifier_sdk::{
-        gen_pk,
-        halo2::{
-            aggregation::{AggregationCircuit, AggregationConfigParams, VerifierUniversality},
-            gen_snark_shplonk,
-        },
-        Snark, SHPLONK,
-    };
+    //use halo2_base::utils::testing::base_test;
     use crate::utils::run;
 
-    use super::insert_leaf;
-    use super::IdxLeaf;
-    const T:usize=3;
-    const RATE:usize=2;
+    use halo2_base::halo2_proofs::halo2curves::bn256;
+    use halo2_base::{
+        gates::{
+            circuit::{builder::BaseCircuitBuilder, BaseCircuitParams, CircuitBuilderStage},
+            GateChip, RangeChip, RangeInstructions,
+        },
+        halo2_proofs::halo2curves::grumpkin::Fq as Fr,
+        halo2_proofs::{circuit::Value, halo2curves::bn256::Bn256},
+        poseidon::hasher::{spec::OptimizedPoseidonSpec, PoseidonHasher},
+        utils::{fs::gen_srs, BigPrimeField},
+        AssignedValue, Context,
+    };
+    //use serde::de::DeserializeOwned;
+    // use snark_verifier_sdk::{
+
+    //     halo2::{
+    //         aggregation::{AggregationCircuit, AggregationConfigParams, VerifierUniversality},
+    //         gen_snark_shplonk,
+    //     },
+    //     Snark, SHPLONK,
+    // };
+    // use crate::utils::run;
+
+    use super::{insert_leaf, IdxLeaf, InsertLeafInp};
+    #[warn(dead_code)]
+    const T: usize = 3;
+    const RATE: usize = 2;
     const R_F: usize = 8;
     const R_P: usize = 57;
 
-    fn merkle_help<F:BigPrimeField>(Leaves:Vec<AssignedValue<F>>, builder:&mut BaseCircuitBuilder<F>)->AssignedValue<F>{
-        let mut leaves=Leaves.clone();
-        while(leaves.len()>1){
-            let mut nxtlevel:Vec<AssignedValue<F>>=vec![];
-            for (i,_) in leaves.iter().enumerate().step_by(2){
-                let left=leaves[i];
-                let right =leaves[i+1];
-                let gate=GateChip::<F>::default();
-                let mut poseidon =
-                PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
-                let ctx = builder.main(0);
-                poseidon.initialize_consts(ctx, &gate);
-                nxtlevel.push(poseidon.hash_fix_len_array(ctx, &gate, &[left,right]));
-            }
-            leaves=nxtlevel;
-        }
-        leaves[0]
+    pub fn merkle_help<F: BigPrimeField>(
+        leavess: Vec<AssignedValue<F>>,
+        ctx: &mut Context<F>,
+    ) -> Vec<Vec<AssignedValue<F>>> {
+        let mut leaves = leavess.clone();
+        let mut help_sib: Vec<Vec<AssignedValue<F>>> = vec![];
 
+        while leaves.len() > 1 {
+            let mut nxtlevel: Vec<AssignedValue<F>> = vec![];
+            for (i, _) in leaves.iter().enumerate().step_by(2) {
+                let left = leaves[i];
+                let right = leaves[i + 1];
+                let gate = GateChip::<F>::default();
+                let mut poseidon =
+                    PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+
+                poseidon.initialize_consts(ctx, &gate);
+                nxtlevel.push(poseidon.hash_fix_len_array(ctx, &gate, &[left, right]));
+            }
+            help_sib.push(nxtlevel.clone());
+            leaves = nxtlevel;
+        }
+        help_sib.push(vec![leaves[0]]);
+        help_sib
     }
+    pub fn get_proof<F: BigPrimeField>(
+        index: usize,
+        helper: Vec<Vec<AssignedValue<F>>>,
+        f_zero: AssignedValue<F>,
+        f_one: AssignedValue<F>,
+    ) -> (Vec<AssignedValue<F>>, Vec<AssignedValue<F>>) {
+        let mut proof: Vec<AssignedValue<F>> = vec![];
+        let mut proof_helper: Vec<AssignedValue<F>> = vec![];
+        let mut cur_idx = index as u32;
+        for i in 0..helper.len() - 1 {
+            let level = helper[i].clone();
+            let isleftleaf = cur_idx % 2 == 0;
+            let sibling_idx = if isleftleaf { cur_idx + 1 } else { cur_idx - 1 };
+            let sibling = level[sibling_idx as usize];
+            proof.push(sibling);
+            proof_helper.push(if isleftleaf { f_one } else { f_zero });
+            cur_idx = cur_idx / 2 as u32;
+        }
+        (proof, proof_helper)
+    }
+
+    // pub fn verify_tree<F:BigPrimeField>(leaf:AssignedValue<F>,index:usize,root:AssignedValue<F>,proof:AssignedValue<F>){
+    //     let hash=leaf;
+
+    // }
 
     #[test]
     fn test_insert_leaf() {
-        pub struct leaff<F:BigPrimeField>{
-            leaf:AssignedValue<F>
+        pub struct leaff<F:BigPrimeField> {
+            leaf: AssignedValue<F>,
         }
-        impl<F:BigPrimeField> leaff<F>{
-          pub fn test(){
-            let treesize =u32::pow(2,3);
-            let mut leaves:Vec<AssignedValue<F>>=vec![];
-           
-    
-            let mut builder=BaseCircuitBuilder::<F>::default();
-            let gate=GateChip::<F>::default();
-            let mut poseidon =
-            PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
-            let ctx = builder.main(0);
-            poseidon.initialize_consts(ctx, &gate);
-            
+        impl<F: BigPrimeField> leaff<F> {
+            pub fn test() {
+                let treesize = u32::pow(2, 3);
+                let mut leaves: Vec<AssignedValue<F>> = vec![];
 
-            let f_zero=ctx.load_constant(F::ZERO);
-            for i in 0..treesize{
-                if i==0{
-                    leaves.push(poseidon.hash_fix_len_array(ctx, &gate, &[f_zero,f_zero,f_zero]));
+                let mut builder = BaseCircuitBuilder::<F>::default();
+                let gate = GateChip::<F>::default();
+                let mut poseidon =
+                    PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+                let ctx = builder.main(0);
+                poseidon.initialize_consts(ctx, &gate);
+
+                let f_zero = ctx.load_constant(F::ZERO);
+                let f_one = ctx.load_constant(F::ONE);
+                for i in 0..treesize {
+                    if i == 0 {
+                        leaves.push(poseidon.hash_fix_len_array(
+                            ctx,
+                            &gate,
+                            &[f_zero, f_zero, f_zero],
+                        ));
+                    } else {
+                        leaves.push(f_zero);
+                    }
                 }
-                else{
-                    leaves.push(f_zero);
-                }
+                let newVal = ctx.load_constant(F::from_u128(69 as u128));
+
+                let mut helper = merkle_help::<F>(leaves.clone(), ctx);
+                let oldroot = helper.pop().unwrap()[0];
+                let lowleaf = IdxLeaf {
+                    val: f_zero,
+                    next_val: f_zero,
+                    next_idx: f_zero,
+                };
+
+                let (low_leaf_proof, low_leaf_helper) = get_proof(0, helper, f_zero, f_one);
+
+                let new_low_leaf = IdxLeaf {
+                    val: lowleaf.val.clone(),
+                    next_val: newVal.clone(),
+                    next_idx: f_one,
+                };
+                leaves[0] = poseidon.hash_fix_len_array(
+                    ctx,
+                    &gate,
+                    &[
+                        new_low_leaf.val.clone(),
+                        new_low_leaf.next_val.clone(),
+                        new_low_leaf.next_idx.clone(),
+                    ],
+                );
+
+                let mut new_helper = merkle_help::<F>(leaves.clone(), ctx);
+                let new_helper_root = new_helper.pop().unwrap();
+
+                let (new_leaf_proof, new_leaf_helper) = get_proof(1, new_helper, f_zero, f_one);
+
+                leaves[1] = poseidon.hash_fix_len_array(ctx, &gate, &[newVal, f_zero, f_zero]);
+
+                let mut new_helper = merkle_help::<F>(leaves, ctx);
+                let new_root = new_helper.pop().unwrap()[0];
+
+                let new_leaf = IdxLeaf {
+                    val: newVal.clone(),
+                    next_val: f_zero,
+                    next_idx: f_zero,
+                };
+
+                let new_leaf_idx = f_one;
+                let isNewLeafLargest = true;
+
+               
+
+                // base_test()
+                //     .k(16)
+                //     .lookup_bits(15)
+                //     .expect_satisfied(true)
+                //     .run(|ctx, range| {
+                //         let input = InsertLeafInp::<F> {
+                //             range: range,
+                //             old_root: oldroot,
+                //             low_leaf: lowleaf,
+                //             low_leaf_proof,
+                //             low_leaf_proof_helper: low_leaf_helper,
+                //             new_root,
+                //             new_leaf,
+                //             new_leaf_index: new_leaf_idx,
+                //             new_leaf_proof: new_leaf_proof,
+                //             new_leaf_proof_helper: new_leaf_helper,
+                //             is_new_leaf_largest: isNewLeafLargest,
+                //         };
+                //         let mut make_public: Vec<AssignedValue<F>> = vec![];
+                //         insert_leaf::<F, T, RATE>(&mut builder, input, &mut make_public);
+                //     });
+
+                    run(16, circuit_params, f, inputs)
+
             }
-            let newVal=ctx.load_constant(F::from_u128(69 as u128));
-
-            let old_root=merkle_help(leaves, &mut builder);
-            let lowleaf=IdxLeaf{
-                val:f_zero,
-                next_val:f_zero,
-                next_idx:f_zero
-            };
-          }
-            
         }
-       
+        // let mut builder=BaseCircuitBuilder::<Fr>::default();
+        // let leaf=builder.main(0).load_constant(Fr::one());
+        //    let x=leaff{
+        //     leaf
+        //    };
 
-
-
+        leaff::<Fr>::test();
     }
 }
