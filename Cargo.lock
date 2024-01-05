@@ -570,6 +570,7 @@ name = "halo2-base"
 version = "0.4.1"
 source = "git+https://github.com/axiom-crypto/halo2-lib.git#8cdbf542a70455042ff7c8cdbedb552ca174a00d"
 dependencies = [
+ "ark-std 0.3.0",
  "getset",
  "halo2-axiom 0.4.2",
  "itertools 0.11.0",
@@ -579,6 +580,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "poseidon-primitives",
+ "rand",
  "rand_chacha",
  "rayon",
  "rustc-hash",
@@ -695,7 +697,7 @@ name = "idx-merkle"
 version = "0.1.0"
 dependencies = [
  "ark-std 0.4.0",
- "halo2-base 0.4.0",
+ "halo2-base 0.4.1",
  "halo2-ecc 0.4.1",
  "num-bigint",
  "num-traits",
