@@ -48,32 +48,29 @@ pub struct InsertLeafInp<'a, F: BigPrimeField> {
     new_leaf_proof_helper: Vec<AssignedValue<F>>,
     is_new_leaf_largest: bool,
 }
-pub fn verify_non_inclusion<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
+pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>(
     builder: &mut BaseCircuitBuilder<F>,
     input: NonInclusionInp<F>,
 ) {
     let ctx = builder.main(0);
     if input.islargest {
-        assert!(input.lowleaf.next_val.value().clone() == F::ZERO)
+        assert!(*input.lowleaf.next_val.value() == F::ZERO)
     } else {
         assert!(input.lowleaf.next_val.value() > input.newleafvalue.value());
     }
-    
+
     let spec = OptimizedPoseidonSpec::<F, T, RATE>::new::<8, 57, 0>();
     let mut hasher = PoseidonHasher::<F, T, RATE>::new(spec);
     hasher.initialize_consts(ctx, input.range.gate());
-    //let three = ctx.load_constant(F::from(3u64));
 
     let inp = [
         input.lowleaf.val,
         input.lowleaf.next_val,
         input.lowleaf.next_idx,
     ];
-    let mut hasher =
-    PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
-    let gate=input.range.gate();
+    let mut hasher = PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
+    let gate = input.range.gate();
     hasher.initialize_consts(ctx, gate);
-
 
     let lowleaf_hash = hasher.hash_fix_len_array(ctx, gate, &inp);
 
@@ -86,9 +83,6 @@ pub fn verify_non_inclusion<'a, F: BigPrimeField, const T: usize, const RATE: us
     };
     let mut new: Vec<AssignedValue<F>> = vec![];
 
-    println!("\n\nindexes={:?}\n\n\n",input.lowleafidx);
-    
-
     assert_eq!(
         *verify_merkle_proof::<F, T, RATE>(builder, ver_input, &mut new)
             .unwrap()
@@ -96,7 +90,7 @@ pub fn verify_non_inclusion<'a, F: BigPrimeField, const T: usize, const RATE: us
         F::ONE
     );
     //todo
-    assert_eq!(input.newleafvalue.value() > input.lowleaf.val.value(), true);
+    assert!(input.newleafvalue.value() > input.lowleaf.val.value());
 }
 
 fn dual_mux<F: ScalarField>(
@@ -113,111 +107,100 @@ fn dual_mux<F: ScalarField>(
 
     let left = gate.mul_add(ctx, a_sub_b, *switch, *b); // left = (a-b)*s + b;
     let right = gate.mul_add(ctx, b_sub_a, *switch, *a); // right = (b-a)*s + a;
-   
+
     [left, right]
 }
-pub fn verify_merkle_proof<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
+pub fn verify_merkle_proof<F: BigPrimeField, const T: usize, const RATE: usize>(
     builder: &mut BaseCircuitBuilder<F>,
-    input: MerCirInput<'a, F>,
+    input: MerCirInput<'_, F>,
     make_public: &mut Vec<AssignedValue<F>>,
 ) -> Result<AssignedValue<F>, Error> {
-    //verify_proof(input.leaf.clone(), 0, input.root.clone(), input.proof.clone().to_vec());
-    let mut hasher =
-    PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
+    let mut hasher = PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
     let ctx = builder.main(0);
-    let gate=input.range.gate();
+    let gate = input.range.gate();
     hasher.initialize_consts(ctx, gate);
-    //let two = ctx.load_constant(F::from(2u64));
-    let mut computed_hash = ctx.load_witness(input.leaf.value().clone());
-    make_public.push(computed_hash.clone());
 
-    for (_, (proof_element, helper)) in input.proof.iter().zip(input.helper.iter()).enumerate() {
+    let mut computed_hash = ctx.load_witness(*input.leaf.value());
+    make_public.push(computed_hash);
+
+    for (proof_element, helper) in input.proof.iter().zip(input.helper.iter()) {
         let inp = dual_mux(ctx, gate, &computed_hash, proof_element, helper);
         computed_hash = hasher.hash_fix_len_array(ctx, gate, &inp);
     }
-    make_public.push(computed_hash.clone());
-    //println!("the v alue of the verify_merkle tre{:?}",gate.is_equal(ctx, computed_hash, *input.root).value());
-    println!(
-        "computed hash ={:?} \n expected hash ={:?}",
-        computed_hash.value, *input.root
-    );
+    make_public.push(computed_hash);
+
     Ok(gate.is_equal(ctx, computed_hash, *input.root))
 }
 
-fn computemerkleroot<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
+fn computemerkleroot< F: BigPrimeField, const T: usize, const RATE: usize>(
     builder: &mut BaseCircuitBuilder<F>,
     leaf: AssignedValue<F>,
     siblings: Vec<AssignedValue<F>>,
     sib_idx: Vec<AssignedValue<F>>,
-    range: &'a RangeChip<F>,
+    range: & RangeChip<F>,
 ) -> Result<AssignedValue<F>, Error> {
     let mut hash = leaf;
-    let mut hasher =
-    PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
+    let mut hasher = PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
     let ctx = builder.main(0);
-    let gate=range.gate();
+    let gate = range.gate();
     hasher.initialize_consts(ctx, gate);
-   // let two = ctx.load_constant(F::from(2u64));
+
     for i in 0..siblings.len() {
         let inp = dual_mux(ctx, gate, &hash, &siblings[i], &sib_idx[i]);
         hash = hasher.hash_fix_len_array(ctx, gate, &inp);
     }
-    Ok(hash.clone())
+    Ok(hash)
 }
 
-pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
+pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     builder: &mut BaseCircuitBuilder<F>,
     input: InsertLeafInp<F>,
     make_public: &mut Vec<AssignedValue<F>>,
 ) {
     let non_inc_inp = NonInclusionInp {
         range: input.range,
-        root: input.old_root.clone(),
+        root: input.old_root,
         lowleaf: input.low_leaf.clone(),
         lowleafsib: input.low_leaf_proof.clone(),
         lowleafidx: input.low_leaf_proof_helper.clone(),
-        newleafvalue: input.new_leaf.val.clone(),
-        islargest: input.is_new_leaf_largest.clone(),
+        newleafvalue: input.new_leaf.val,
+        islargest: input.is_new_leaf_largest,
     };
-   // println!("low_leaf={:?} \n low_leaf_sib={:?} \n lowleafidx={:?}",non_inc_inp.lowleaf,non_inc_inp.lowleafsib.len(),non_inc_inp.lowleafidx.len());
+
     verify_non_inclusion::<F, T, RATE>(builder, non_inc_inp);
     let newlowleaf = IdxLeaf {
         val: input.low_leaf.val,
-        next_idx: input.new_leaf_index.clone(),
-        next_val: input.new_leaf.val.clone(),
+        next_idx: input.new_leaf_index,
+        next_val: input.new_leaf.val,
     };
-    println!("DONE NON INCLUSION");
 
-    let mut hasher =
-    PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
+    let mut hasher = PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
     let ctx = builder.main(0);
-    let gate=input.range.gate();
+    let gate = input.range.gate();
     hasher.initialize_consts(ctx, gate);
 
     //edit
-    let three = builder.main(0).load_constant(F::from(3u64));
-    
+
     let inp = [
-        newlowleaf.val.clone(),
-        newlowleaf.next_val.clone(),
-        newlowleaf.next_idx.clone(),
+        newlowleaf.val,
+        newlowleaf.next_val,
+        newlowleaf.next_idx,
     ];
-    let ctx=builder.main(0);
-   
-    let leaf_hash = hasher.hash_fix_len_array(ctx,gate, &inp);
-    
+    let ctx = builder.main(0);
+
+    let leaf_hash = hasher.hash_fix_len_array(ctx, gate, &inp);
+
     let zero = builder.main(0).load_constant(F::ZERO);
-    
+
     let intermimroot = computemerkleroot::<F, T, RATE>(
         builder,
-        leaf_hash.clone(),
+        leaf_hash,
         input.low_leaf_proof.clone(),
         input.low_leaf_proof_helper.clone(),
         input.range,
     )
     .unwrap();
 
-    
     let inp_ver = MerCirInput {
         range: input.range,
         root: &intermimroot,
@@ -226,12 +209,9 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
         helper: &input.new_leaf_proof_helper.clone(),
     };
     //todo
-   
-    verify_proof(zero, 1, intermimroot.clone(), input.new_leaf_proof.clone());
-   println!("1st sibling of new leaf={:?}",leaf_hash.value);
-   println!("new leaf proof={:?}\n\nnew leaf helper ={:?}",input.new_leaf_proof,input.new_leaf_proof_helper);
 
-  
+    verify_proof(zero, 1, intermimroot, input.new_leaf_proof.clone());
+
     assert_eq!(
         verify_merkle_proof::<F, T, RATE>(builder, inp_ver, make_public)
             .unwrap()
@@ -239,7 +219,7 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
             .clone(),
         F::ONE
     );
-    println!("\n STILL HERE \n");
+
     assert_eq!(
         input.new_leaf.next_val.value().clone(),
         input.low_leaf.next_val.value().clone()
@@ -250,11 +230,11 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
     );
 
     let inp2 = [
-        input.new_leaf.val.clone(),
-        input.new_leaf.next_val.clone(),
-        input.new_leaf.next_idx.clone(),
+        input.new_leaf.val,
+        input.new_leaf.next_val,
+        input.new_leaf.next_idx,
     ];
-    
+
     let newleaf_hash = hasher.hash_fix_len_array(builder.main(0), gate, &inp2);
 
     assert_eq!(
@@ -270,44 +250,39 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
         .clone(),
         input.new_root.value().clone()
     );
-
-    println!("---------------------");
 }
-pub fn verify_proof<F:BigPrimeField>(
+pub fn verify_proof<F: BigPrimeField>(
     leaf: AssignedValue<F>,
-   index: usize,
-   root: AssignedValue<F>,
-   proof: Vec<AssignedValue<F>>
-){
-    let mut comp_hash=leaf;
-    let mut cur_idx=index as u32;
+    index: usize,
+    root: AssignedValue<F>,
+    proof: Vec<AssignedValue<F>>,
+) {
+    let mut comp_hash = leaf;
+    let mut cur_idx = index as u32;
     let mut builder = BaseCircuitBuilder::<F>::default();
     let gate = GateChip::<F>::default();
-   // const RATE3:usize=RATE+1;
-    let mut poseidon =
-        PoseidonHasher::<F, 3, 2>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
+
+    let mut poseidon = PoseidonHasher::<F, 3, 2>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
     let ctx = builder.main(0);
     poseidon.initialize_consts(ctx, &gate);
 
-
-    for i in 0..proof.len(){
-        let sib=proof[i];
-        let isleft=cur_idx%2==0;
-        comp_hash = if isleft{poseidon.hash_fix_len_array(ctx, &gate, &[comp_hash,sib])} else{poseidon.hash_fix_len_array(ctx, &gate, &[sib,comp_hash])};
-        cur_idx=cur_idx/2 as u32;
+    for prf in proof {
+        let sib =prf;
+        let isleft = cur_idx % 2 == 0;
+        comp_hash = if isleft {
+            poseidon.hash_fix_len_array(ctx, &gate, &[comp_hash, sib])
+        } else {
+            poseidon.hash_fix_len_array(ctx, &gate, &[sib, comp_hash])
+        };
+        cur_idx /= 2;
     }
-    println!("comp_hash in circuit ={:?}",comp_hash.value().clone());
-    println!("expected root in circuit ={:?}",root.value().clone());
-    assert_eq!(comp_hash.value,root.value);
-
+    assert_eq!(comp_hash.value, root.value);
 }
-
 
 #[cfg(test)]
 mod test {
     use ark_std::{end_timer, start_timer};
     use halo2_base::utils::testing::base_test;
-    // use crate::utils::run;
 
     use halo2_base::halo2_proofs::halo2curves::bn256;
     use halo2_base::{
@@ -321,16 +296,6 @@ mod test {
         utils::{fs::gen_srs, BigPrimeField},
         AssignedValue, Context,
     };
-    //use serde::de::DeserializeOwned;
-    // use snark_verifier_sdk::{
-
-    //     halo2::{
-    //         aggregation::{AggregationCircuit, AggregationConfigParams, VerifierUniversality},
-    //         gen_snark_shplonk,
-    //     },
-    //     Snark, SHPLONK,
-    // };
-    // use crate::utils::run;
 
     use super::{insert_leaf, IdxLeaf, InsertLeafInp};
     #[warn(dead_code)]
@@ -362,7 +327,7 @@ mod test {
             help_sib.push(nxtlevel.clone());
             leaves = nxtlevel;
         }
-        //help_sib.push(vec![leaves[0]]);
+
         help_sib
     }
     pub fn get_proof<F: BigPrimeField>(
@@ -374,7 +339,7 @@ mod test {
         let mut proof: Vec<AssignedValue<F>> = vec![];
         let mut proof_helper: Vec<AssignedValue<F>> = vec![];
         let mut cur_idx = index as u32;
-     //   println!("{}",index);
+
         for i in 0..helper.len() {
             let level = helper[i].clone();
             let isleftleaf = cur_idx % 2 == 0;
@@ -384,42 +349,39 @@ mod test {
             //todo
             proof_helper.push(if isleftleaf { f_one } else { f_zero });
 
-        
-
-         //   println!("cur_idx={}",cur_idx);
             cur_idx = cur_idx / 2 as u32;
         }
-     //   println!("siblings={:?}",proof);
+
         (proof, proof_helper)
     }
     pub fn verify_proof(
         leaf: AssignedValue<Fr>,
-       index: usize,
-       root: AssignedValue<Fr>,
-       proof: Vec<AssignedValue<Fr>>
-    ){
-        let mut comp_hash=leaf;
-        let mut cur_idx=index as u32;
+        index: usize,
+        root: AssignedValue<Fr>,
+        proof: Vec<AssignedValue<Fr>>,
+    ) {
+        let mut comp_hash = leaf;
+        let mut cur_idx = index as u32;
         let mut builder = BaseCircuitBuilder::<Fr>::default();
         let gate = GateChip::<Fr>::default();
-       // const RATE3:usize=RATE+1;
+
         let mut poseidon =
             PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
         let ctx = builder.main(0);
         poseidon.initialize_consts(ctx, &gate);
 
-
-        for i in 0..proof.len(){
-            let sib=proof[i];
-            let isleft=cur_idx%2==0;
-            comp_hash = if isleft{poseidon.hash_fix_len_array(ctx, &gate, &[comp_hash,sib])} else{poseidon.hash_fix_len_array(ctx, &gate, &[sib,comp_hash])};
-            cur_idx=cur_idx/2 as u32;
+        for i in 0..proof.len() {
+            let sib = proof[i];
+            let isleft = cur_idx % 2 == 0;
+            comp_hash = if isleft {
+                poseidon.hash_fix_len_array(ctx, &gate, &[comp_hash, sib])
+            } else {
+                poseidon.hash_fix_len_array(ctx, &gate, &[sib, comp_hash])
+            };
+            cur_idx = cur_idx / 2 as u32;
         }
-        assert_eq!(comp_hash.value,root.value);
-
+        assert_eq!(comp_hash.value, root.value);
     }
-
-   
 
     #[test]
     fn test_insert_leaf() {
@@ -428,7 +390,7 @@ mod test {
 
         let mut builder = BaseCircuitBuilder::<Fr>::default();
         let gate = GateChip::<Fr>::default();
-       
+
         let mut poseidon =
             PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
         let ctx = builder.main(0);
@@ -445,14 +407,9 @@ mod test {
         }
         let newVal = ctx.load_constant(Fr::from(69));
 
-       
-
         let mut helper = merkle_help::<Fr>(leaves.clone(), ctx);
 
         let oldroot = helper.pop().unwrap()[0];
-
-     
-        
 
         let lowleaf = IdxLeaf {
             val: f_zero,
@@ -460,13 +417,13 @@ mod test {
             next_idx: f_zero,
         };
 
-      
-
         let (low_leaf_proof, low_leaf_helper) = get_proof(0, helper, f_zero, f_one);
-        verify_proof(leaves[0].clone(), 0, oldroot.clone(), low_leaf_proof.clone());
-        println!("-------------------------------verifyyyyyy-----------------------------------------");
-
-  
+        verify_proof(
+            leaves[0].clone(),
+            0,
+            oldroot.clone(),
+            low_leaf_proof.clone(),
+        );
 
         let new_low_leaf = IdxLeaf {
             val: lowleaf.val.clone(),
@@ -483,30 +440,30 @@ mod test {
             ],
         );
 
-
         let mut new_helper = merkle_help::<Fr>(leaves.clone(), ctx);
         let new_helper_root = new_helper.pop().unwrap()[0];
 
-      
-
-
         let (new_leaf_proof, new_leaf_helper) = get_proof(1, new_helper, f_zero, f_one);
 
-        verify_proof(leaves[1].clone(), 1, new_helper_root.clone(), new_leaf_proof.clone());
-        println!("-------------------------------verifyyyyyy2222222--------------------------------------");
+        verify_proof(
+            leaves[1].clone(),
+            1,
+            new_helper_root.clone(),
+            new_leaf_proof.clone(),
+        );
 
-
-       // println!("siblings and idx for index = {} \n\new_leaf_proof={:?}\n new_leaf_helper={:?}",1,new_leaf_proof,new_leaf_helper);
         leaves[1] = poseidon.hash_fix_len_array(ctx, &gate, &[newVal, f_zero, f_zero]);
 
         let mut new_helper = merkle_help::<Fr>(leaves.clone(), ctx);
         let new_root = new_helper.pop().unwrap()[0];
 
-        verify_proof(leaves[1].clone(), 1, new_root.clone(), new_leaf_proof.clone());
-        println!("-------------------------------verifyyyyyy333333--------------------------------------");
+        verify_proof(
+            leaves[1].clone(),
+            1,
+            new_root.clone(),
+            new_leaf_proof.clone(),
+        );
 
-
-        println!("newroot after leaves[1] update={:?}",new_root.value);
         let new_leaf = IdxLeaf {
             val: newVal.clone(),
             next_val: f_zero,
@@ -514,7 +471,7 @@ mod test {
         };
 
         let new_leaf_idx = f_one;
-        let isNewLeafLargest = true;
+        let is_new_leaf_largest = true;
 
         base_test()
             .k(16)
@@ -532,21 +489,14 @@ mod test {
                     new_leaf_index: new_leaf_idx,
                     new_leaf_proof: new_leaf_proof,
                     new_leaf_proof_helper: new_leaf_helper,
-                    is_new_leaf_largest: isNewLeafLargest,
+                    is_new_leaf_largest,
                 };
-              //  println!("old_root={:?} \n low_leaf={:?} \n lowleafproof={:?} \n low_leaf_proof_helper={:?} \n new_root={:?} \n new_leaf={:?} \n  new_leaf_index={:?} \n new_leaf_proof={:?} \n new_leaf_proof_helper={:?} ",input.old_root,input.low_leaf,input.low_leaf_proof,input.low_leaf_proof_helper,input.new_root,input.new_leaf,input.new_leaf_index,input.new_leaf_proof,input.new_leaf_proof_helper);
-               
-                
+
                 let mut make_public: Vec<AssignedValue<Fr>> = vec![];
                 let mut builder1 = BaseCircuitBuilder::<Fr>::default();
+
+                println!("TEST STARTS HEAR");
                 insert_leaf::<Fr, T, RATE>(&mut builder1, input, &mut make_public);
             });
-
-        // run(16, circuit_params, f, inputs)
     }
 }
-// let mut builder=BaseCircuitBuilder::<Fr>::default();
-// let leaf=builder.main(0).load_constant(Fr::one());
-//    let x=leaff{
-//     leaf
-//    };
