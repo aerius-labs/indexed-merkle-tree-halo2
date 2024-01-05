@@ -85,6 +85,8 @@ pub fn verify_non_inclusion<'a, F: BigPrimeField, const T: usize, const RATE: us
         helper: &input.lowleafidx.to_vec(),
     };
     let mut new: Vec<AssignedValue<F>> = vec![];
+
+    println!("\n\nindexes={:?}\n\n\n",input.lowleafidx);
     
 
     assert_eq!(
@@ -93,6 +95,7 @@ pub fn verify_non_inclusion<'a, F: BigPrimeField, const T: usize, const RATE: us
             .value(),
         F::ONE
     );
+    //todo
     assert_eq!(input.newleafvalue.value() > input.lowleaf.val.value(), true);
 }
 
@@ -118,7 +121,7 @@ pub fn verify_merkle_proof<'a, F: BigPrimeField, const T: usize, const RATE: usi
     input: MerCirInput<'a, F>,
     make_public: &mut Vec<AssignedValue<F>>,
 ) -> Result<AssignedValue<F>, Error> {
-    verify_proof(input.leaf.clone(), 0, input.root.clone(), input.proof.clone().to_vec());
+    //verify_proof(input.leaf.clone(), 0, input.root.clone(), input.proof.clone().to_vec());
     let mut hasher =
     PoseidonHasher::<F, T, RATE>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
     let ctx = builder.main(0);
@@ -180,8 +183,8 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
     verify_non_inclusion::<F, T, RATE>(builder, non_inc_inp);
     let newlowleaf = IdxLeaf {
         val: input.low_leaf.val,
-        next_idx: input.new_leaf_index,
-        next_val: input.low_leaf.next_val,
+        next_idx: input.new_leaf_index.clone(),
+        next_val: input.new_leaf.val.clone(),
     };
     println!("DONE NON INCLUSION");
 
@@ -207,7 +210,7 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
     
     let intermimroot = computemerkleroot::<F, T, RATE>(
         builder,
-        leaf_hash,
+        leaf_hash.clone(),
         input.low_leaf_proof.clone(),
         input.low_leaf_proof_helper.clone(),
         input.range,
@@ -223,8 +226,12 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
         helper: &input.new_leaf_proof_helper.clone(),
     };
     //todo
-    println!("\n STILL HERE \n");
+   
     verify_proof(zero, 1, intermimroot.clone(), input.new_leaf_proof.clone());
+   println!("1st sibling of new leaf={:?}",leaf_hash.value);
+   println!("new leaf proof={:?}\n\nnew leaf helper ={:?}",input.new_leaf_proof,input.new_leaf_proof_helper);
+
+  
     assert_eq!(
         verify_merkle_proof::<F, T, RATE>(builder, inp_ver, make_public)
             .unwrap()
@@ -232,6 +239,7 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
             .clone(),
         F::ONE
     );
+    println!("\n STILL HERE \n");
     assert_eq!(
         input.new_leaf.next_val.value().clone(),
         input.low_leaf.next_val.value().clone()
@@ -254,7 +262,7 @@ pub fn insert_leaf<'a, F: BigPrimeField, const T: usize, const RATE: usize>(
             builder,
             newleaf_hash,
             input.new_leaf_proof.clone(),
-            input.low_leaf_proof_helper.clone(),
+            input.new_leaf_proof_helper.clone(),
             input.range
         )
         .unwrap()
@@ -437,16 +445,13 @@ mod test {
         }
         let newVal = ctx.load_constant(Fr::from(69));
 
-        println!("leaves before update ={:?}\n",leaves);
+       
 
         let mut helper = merkle_help::<Fr>(leaves.clone(), ctx);
 
         let oldroot = helper.pop().unwrap()[0];
 
-        println!(" oldroot ={:?}",oldroot.value);
-        for i in 0..helper.len(){
-            println!("nodes at level[{}]={:?}",i,helper[i]);
-        }
+     
         
 
         let lowleaf = IdxLeaf {
@@ -455,13 +460,13 @@ mod test {
             next_idx: f_zero,
         };
 
-        println!("lowleaf val={:?}\nlowleaf next_val={:?}\n lowleaf next_idx={:?}",lowleaf.val.value,lowleaf.next_val,lowleaf.next_idx);
+      
 
         let (low_leaf_proof, low_leaf_helper) = get_proof(0, helper, f_zero, f_one);
         verify_proof(leaves[0].clone(), 0, oldroot.clone(), low_leaf_proof.clone());
         println!("-------------------------------verifyyyyyy-----------------------------------------");
 
-        println!("siblings and idx for index = {} \n\nlow_leaf_proof={:?}\n low_leaf_helper={:?}",0,low_leaf_proof,low_leaf_helper);
+  
 
         let new_low_leaf = IdxLeaf {
             val: lowleaf.val.clone(),
@@ -478,14 +483,12 @@ mod test {
             ],
         );
 
-        println!("updated leaves after leaves[0] changed={:?}",leaves);
 
         let mut new_helper = merkle_help::<Fr>(leaves.clone(), ctx);
         let new_helper_root = new_helper.pop().unwrap()[0];
 
-        for i in 0..new_helper.len(){
-        println!("nodes for level={},leaf={:?}",i,new_helper[i]);
-        }
+      
+
 
         let (new_leaf_proof, new_leaf_helper) = get_proof(1, new_helper, f_zero, f_one);
 
@@ -493,7 +496,7 @@ mod test {
         println!("-------------------------------verifyyyyyy2222222--------------------------------------");
 
 
-        println!("siblings and idx for index = {} \n\new_leaf_proof={:?}\n new_leaf_helper={:?}",1,new_leaf_proof,new_leaf_helper);
+       // println!("siblings and idx for index = {} \n\new_leaf_proof={:?}\n new_leaf_helper={:?}",1,new_leaf_proof,new_leaf_helper);
         leaves[1] = poseidon.hash_fix_len_array(ctx, &gate, &[newVal, f_zero, f_zero]);
 
         let mut new_helper = merkle_help::<Fr>(leaves.clone(), ctx);

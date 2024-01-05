@@ -82,4 +82,5 @@
 //     }
 
 //     builder
+//let inp=if helper.value().clone()==F::ZERO {[proof_element.to_owned(),computed_hash]} else{[computed_hash,proof_element.to_owned()]};
 // }
