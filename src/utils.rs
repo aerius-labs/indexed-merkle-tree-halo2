@@ -1,86 +1,58 @@
-// use halo2_base::{
-//     gates::circuit::{builder::BaseCircuitBuilder, BaseCircuitParams, CircuitBuilderStage},
-//     halo2_proofs::{
-//         halo2curves::{bn256::Bn256, grumpkin::Fq as Fr},
-//         plonk::verify_proof,
-//         poly::kzg::{
-//             commitment::KZGCommitmentScheme, multiopen::VerifierSHPLONK, strategy::SingleStrategy,
-//         },
-//     },
-//     utils::fs::gen_srs,
-//     AssignedValue,
-// };
-// use serde::de::DeserializeOwned;
-// use snark_verifier_sdk::{
-//     gen_pk,
-//     halo2::{gen_snark_shplonk, PoseidonTranscript},
-//     NativeLoader, Snark,
-// };
+use halo2_base::{
+    Context,
+    utils::ScalarField,
+    AssignedValue,
+    gates::{ GateChip, GateInstructions },
+};
 
-// pub fn run<T: DeserializeOwned>(
-//     k: u32,
-//     circuit_params: BaseCircuitParams,
-//     f: impl FnOnce(&mut BaseCircuitBuilder<Fr>, T, &mut Vec<AssignedValue<Fr>>),
-//     inputs: T,
-// ) -> Result<Snark, ()> {
-//     // Generate params for the circuit
-//     let params = gen_srs(k);
+// constrains s(a) + (1-s)(b) = output
+pub(crate) fn select<F: ScalarField>(
+    ctx: &mut Context<F>,
+    gate: &GateChip<F>,
+    ONE: AssignedValue<F>,
+    s: AssignedValue<F>,
+    a: AssignedValue<F>,
+    b: AssignedValue<F>
+) -> AssignedValue<F> {
+    gate.assert_bit(ctx, s);
+    let a_s = gate.mul(ctx, a, s);
+    let one_minus_s = gate.sub(ctx, ONE, s);
+    gate.mul_add(ctx, one_minus_s, b, a_s)
+}
 
-//     // Generate a circuit
-//     let circuit = create_circuit(circuit_params, f, inputs, CircuitBuilderStage::Keygen);
+#[cfg(test)]
+mod tests {
+    use halo2_base::{
+        Context,
+        utils::{ ScalarField, testing::base_test },
+        gates::GateChip,
+        halo2_proofs::halo2curves::grumpkin::Fq as Fr,
+    };
 
-//     // Generate Proving Key
-//     let pk = gen_pk(&params, &circuit, None);
-//     let vk = pk.get_vk().to_owned();
+    fn select_circuit<F: ScalarField>(ctx: &mut Context<F>, s: bool, a: F, b: F) {
+        let gate = GateChip::<F>::default();
 
-//     // Generate Proof
-//     let proof = gen_snark_shplonk(&params, &pk, circuit, None::<&str>);
+        let ONE = ctx.load_constant(F::ONE);
+        let s = ctx.load_witness(F::from(s));
+        let a = ctx.load_witness(a);
+        let b = ctx.load_witness(b);
 
-//     // Verify Proof
-//     let strategy = SingleStrategy::new(&params);
-//     let instance = &proof.instances[0][..];
-//     let mut transcript = PoseidonTranscript::<NativeLoader, &[u8]>::new::<0>(&proof.proof[..]);
-//     verify_proof::<
-//         KZGCommitmentScheme<Bn256>,
-//         VerifierSHPLONK<'_, Bn256>,
-//         _,
-//         _,
-//         SingleStrategy<'_, Bn256>,
-//     >(&params, &vk, strategy, &[&[instance]], &mut transcript)
-//     .unwrap();
+        let output = super::select(ctx, &gate, ONE, s, a, b);
 
-//     Ok(proof)
-// }
+        assert_eq!(output.value(), b.value());
+    }
 
-// fn create_circuit<T: DeserializeOwned>(
-//     circuit_params: BaseCircuitParams,
-//     f: impl FnOnce(&mut BaseCircuitBuilder<Fr>, T, &mut Vec<AssignedValue<Fr>>),
-//     inputs: T,
-//     stage: CircuitBuilderStage,
-// ) -> BaseCircuitBuilder<Fr> {
-//     let mut builder = BaseCircuitBuilder::new(false).use_params(circuit_params);
+    #[test]
+    fn test_select() {
+        let s = false;
+        let a = 69u64;
+        let b = 420u64;
 
-//     // builder.main(phase) gets a default "main" thread for the given phase. For most purposes we only need to think about phase 0
-//     // we need a 64-bit number as input in this case
-//     // while `some_algorithm_in_zk` was written generically for any field `F`, in practice we use the scalar field of the BN254 curve because that's what the proving system backend uses
-//     let mut assigned_instances = vec![];
-//     f(&mut builder, inputs, &mut assigned_instances);
-//     if !assigned_instances.is_empty() {
-//         assert_eq!(
-//             builder.assigned_instances.len(),
-//             1,
-//             "num_instance_columns != 1"
-//         );
-//         builder.assigned_instances[0] = assigned_instances;
-//     }
-
-//     if !stage.witness_gen_only() {
-//         // now `builder` contains the execution trace, and we are ready to actually create the circuit
-//         // minimum rows is the number of rows used for blinding factors. This depends on the circuit itself, but we can guess the number and change it if something breaks (default 9 usually works)
-//         let minimum_rows = 20;
-//         builder.calculate_params(Some(minimum_rows));
-//     }
-
-//     builder
-//let inp=if helper.value().clone()==F::ZERO {[proof_element.to_owned(),computed_hash]} else{[computed_hash,proof_element.to_owned()]};
-// }
+        base_test()
+            .k(9)
+            .expect_satisfied(true)
+            .run(|ctx, _| {
+                select_circuit(ctx, s, Fr::from(a), Fr::from(b));
+            })
+    }
+}
