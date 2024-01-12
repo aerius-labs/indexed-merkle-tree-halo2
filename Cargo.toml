@@ -1,5 +1,5 @@
 [package]
-name = "idx-merkle"
+name = "halo2-indexed-merkle-tree"
 version = "0.1.0"
 edition = "2021"
 

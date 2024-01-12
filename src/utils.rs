@@ -82,14 +82,8 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a
         (proof, proof_helper)
     }
 
-    pub(crate) fn verify_proof(
-        &mut self,
-        leaf: &F,
-        index: usize,
-        root: &F,
-        proof: &Vec<F>,
-    ) -> bool {
-        let mut computed_hash = leaf.clone();
+    pub(crate) fn verify_proof(&mut self, leaf: &F, index: usize, root: &F, proof: &[F]) -> bool {
+        let mut computed_hash = *leaf;
         let mut current_index = index;
 
         for i in 0..proof.len() {

@@ -147,7 +147,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     verify_non_inclusion(
         ctx,
         range,
-        &hasher,
+        hasher,
         old_root,
         low_leaf,
         low_leaf_proof,
@@ -171,7 +171,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     let interim_root = compute_merkle_root(
         ctx,
         range,
-        &hasher,
+        hasher,
         &new_low_leaf_hash,
         low_leaf_proof,
         low_leaf_proof_helper,
@@ -180,7 +180,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     verify_merkle_proof(
         ctx,
         range,
-        &hasher,
+        hasher,
         &interim_root,
         &zero,
         new_leaf_proof,
@@ -199,7 +199,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     let _new_root = compute_merkle_root(
         ctx,
         range,
-        &hasher,
+        hasher,
         &new_leaf_hash,
         new_leaf_proof,
         new_leaf_proof_helper,
@@ -219,7 +219,7 @@ mod test {
     use pse_poseidon::Poseidon;
     use snark_verifier_sdk::halo2::OptimizedPoseidonSpec;
 
-    use crate::idx_tree::{insert_leaf, IndexedMerkleTreeLeaf};
+    use crate::indexed_merkle_tree::{insert_leaf, IndexedMerkleTreeLeaf};
     use crate::utils::{IndexedMerkleTree, IndexedMerkleTreeLeaf as IMTLeaf};
 
     fn select_circuit<F: ScalarField>(ctx: &mut Context<F>, s: bool, a: F, b: F) {
