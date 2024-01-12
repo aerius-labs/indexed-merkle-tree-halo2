@@ -17,7 +17,7 @@ pub(crate) struct IndexedMerkleTreeLeaf<F: ScalarField> {
 impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a, F, T, RATE> {
     pub(crate) fn new(
         hash: &'a mut Poseidon<F, T, RATE>,
-        leaves: Vec<F>
+        leaves: Vec<F>,
     ) -> Result<IndexedMerkleTree<'a, F, T, RATE>, &'static str> {
         if leaves.is_empty() {
             return Err("Cannot create Merkle Tree with no leaves");
@@ -66,7 +66,11 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a
         for i in 0..self.tree.len() - 1 {
             let level = &self.tree[i];
             let is_left_node = current_index % 2 == 0;
-            let sibling_index = if is_left_node { current_index + 1 } else { current_index - 1 };
+            let sibling_index = if is_left_node {
+                current_index + 1
+            } else {
+                current_index - 1
+            };
             let sibling = level[sibling_index];
 
             proof.push(sibling);
@@ -78,7 +82,13 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a
         (proof, proof_helper)
     }
 
-    pub(crate) fn verify_proof(&mut self, leaf: &F, index: usize, root: &F, proof: &Vec<F>) -> bool {
+    pub(crate) fn verify_proof(
+        &mut self,
+        leaf: &F,
+        index: usize,
+        root: &F,
+        proof: &Vec<F>,
+    ) -> bool {
         let mut computed_hash = leaf.clone();
         let mut current_index = index;
 
