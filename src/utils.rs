@@ -15,7 +15,7 @@ pub(crate) struct IndexedMerkleTreeLeaf<F: ScalarField> {
 }
 
 impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a, F, T, RATE> {
-    pub fn new(
+    pub(crate) fn new(
         hash: &'a mut Poseidon<F, T, RATE>,
         leaves: Vec<F>
     ) -> Result<IndexedMerkleTree<'a, F, T, RATE>, &'static str> {
@@ -54,11 +54,11 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a
         })
     }
 
-    pub fn get_root(&self) -> F {
+    pub(crate) fn get_root(&self) -> F {
         self.root
     }
 
-    pub fn get_proof(&self, index: usize) -> (Vec<F>, Vec<F>) {
+    pub(crate) fn get_proof(&self, index: usize) -> (Vec<F>, Vec<F>) {
         let mut proof = Vec::new();
         let mut proof_helper = Vec::new();
         let mut current_index = index;
@@ -78,7 +78,7 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a
         (proof, proof_helper)
     }
 
-    pub fn verify_proof(&mut self, leaf: &F, index: usize, root: &F, proof: &Vec<F>) -> bool {
+    pub(crate) fn verify_proof(&mut self, leaf: &F, index: usize, root: &F, proof: &Vec<F>) -> bool {
         let mut computed_hash = leaf.clone();
         let mut current_index = index;
 
