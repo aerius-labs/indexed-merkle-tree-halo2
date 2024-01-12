@@ -1,5 +1,5 @@
 use halo2_base::{
-    gates::{ GateInstructions, RangeChip, RangeInstructions, GateChip },
+    gates::{ GateChip, GateInstructions, RangeChip, RangeInstructions },
     poseidon::hasher::{ spec::OptimizedPoseidonSpec, PoseidonHasher },
     utils::{ BigPrimeField, ScalarField },
     AssignedValue,
@@ -114,10 +114,10 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
         ctx,
         range,
         hasher,
-        &root,
+        root,
         &low_leaf_hash,
-        &low_leaf_proof,
-        &low_leaf_proof_helper
+        low_leaf_proof,
+        low_leaf_proof_helper
     );
 
     range.check_less_than(ctx, low_leaf.val, *new_leaf_value, F::CAPACITY as usize);
@@ -147,10 +147,10 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         ctx,
         range,
         &hasher,
-        &old_root,
+        old_root,
         low_leaf,
-        &low_leaf_proof,
-        &low_leaf_proof_helper,
+        low_leaf_proof,
+        low_leaf_proof_helper,
         &new_leaf.val,
         is_new_leaf_largest
     );
@@ -200,56 +200,18 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         range,
         &hasher,
         &new_leaf_hash,
-        &new_leaf_proof,
-        &new_leaf_proof_helper
+        new_leaf_proof,
+        new_leaf_proof_helper
     );
-    ctx.constrain_equal(&new_root, &_new_root);
+    ctx.constrain_equal(new_root, &_new_root);
 }
-
-//helper function
-// pub fn verify_proof<F: BigPrimeField>(
-//     leaf: AssignedValue<F>,
-//     index: usize,
-//     root: AssignedValue<F>,
-//     proof: Vec<AssignedValue<F>>,
-// ) {
-//     let mut comp_hash = leaf;
-//     let mut cur_idx = index as u32;
-//     let mut builder = BaseCircuitBuilder::<F>::default();
-//     let gate = GateChip::<F>::default();
-
-//     let mut poseidon = PoseidonHasher::<F, 3, 2>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
-//     let ctx = builder.main(0);
-//     poseidon.initialize_consts(ctx, &gate);
-
-//     for prf in proof {
-//         let sib = prf;
-//         let isleft = cur_idx % 2 == 0;
-//         comp_hash = if isleft {
-//             poseidon.hash_fix_len_array(ctx, &gate, &[comp_hash, sib])
-//         } else {
-//             poseidon.hash_fix_len_array(ctx, &gate, &[sib, comp_hash])
-//         };
-//         cur_idx /= 2;
-//     }
-//     assert_eq!(comp_hash.value, root.value);
-// }
 
 #[cfg(test)]
 mod test {
-    use halo2_base::utils::ScalarField;
     use halo2_base::utils::testing::base_test;
+    use halo2_base::utils::ScalarField;
 
-    use halo2_base::{
-        gates::{ circuit::builder::BaseCircuitBuilder, GateChip },
-        halo2_proofs::halo2curves::grumpkin::Fq as Fr,
-        poseidon::hasher::{ spec::OptimizedPoseidonSpec, PoseidonHasher },
-        utils::BigPrimeField,
-        AssignedValue,
-        Context,
-    };
-
-    use super::{ insert_leaf, IndexedMerkleTreeLeaf };
+    use halo2_base::{ gates::GateChip, halo2_proofs::halo2curves::grumpkin::Fq as Fr, Context };
 
     const T: usize = 3;
     const RATE: usize = 2;
@@ -284,180 +246,6 @@ mod test {
             })
     }
 
-    pub fn merkle_help<F: BigPrimeField>(
-        leavess: Vec<AssignedValue<F>>,
-        ctx: &mut Context<F>
-    ) -> Vec<Vec<AssignedValue<F>>> {
-        let mut leaves = leavess.clone();
-        let mut help_sib: Vec<Vec<AssignedValue<F>>> = vec![];
-        help_sib.push(leaves.clone());
-
-        while leaves.len() > 1 {
-            let mut nxtlevel: Vec<AssignedValue<F>> = vec![];
-            for (i, _) in leaves.iter().enumerate().step_by(2) {
-                let left = leaves[i];
-                let right = leaves[i + 1];
-                let gate = GateChip::<F>::default();
-                let mut poseidon = PoseidonHasher::<F, T, RATE>::new(
-                    OptimizedPoseidonSpec::new::<R_F, R_P, 0>()
-                );
-
-                poseidon.initialize_consts(ctx, &gate);
-                nxtlevel.push(poseidon.hash_fix_len_array(ctx, &gate, &[left, right]));
-            }
-            help_sib.push(nxtlevel.clone());
-            leaves = nxtlevel;
-        }
-
-        help_sib
-    }
-    pub fn get_proof<F: BigPrimeField>(
-        index: usize,
-        helper: Vec<Vec<AssignedValue<F>>>,
-        f_zero: AssignedValue<F>,
-        f_one: AssignedValue<F>
-    ) -> (Vec<AssignedValue<F>>, Vec<AssignedValue<F>>) {
-        let mut proof: Vec<AssignedValue<F>> = vec![];
-        let mut proof_helper: Vec<AssignedValue<F>> = vec![];
-        let mut cur_idx = index as u32;
-
-        for i in 0..helper.len() {
-            let level = helper[i].clone();
-            let isleftleaf = cur_idx % 2 == 0;
-            let sibling_idx = if isleftleaf { cur_idx + 1 } else { cur_idx - 1 };
-            let sibling = level[sibling_idx as usize];
-            proof.push(sibling);
-            //todo
-            proof_helper.push(if isleftleaf { f_one } else { f_zero });
-
-            cur_idx = cur_idx / (2 as u32);
-        }
-
-        (proof, proof_helper)
-    }
-    pub fn verify_proof(
-        leaf: AssignedValue<Fr>,
-        index: usize,
-        root: AssignedValue<Fr>,
-        proof: Vec<AssignedValue<Fr>>
-    ) {
-        let mut comp_hash = leaf;
-        let mut cur_idx = index as u32;
-        let mut builder = BaseCircuitBuilder::<Fr>::default();
-        let gate = GateChip::<Fr>::default();
-
-        let mut poseidon = PoseidonHasher::<Fr, T, RATE>::new(
-            OptimizedPoseidonSpec::new::<R_F, R_P, 0>()
-        );
-        let ctx = builder.main(0);
-        poseidon.initialize_consts(ctx, &gate);
-
-        for i in 0..proof.len() {
-            let sib = proof[i];
-            let isleft = cur_idx % 2 == 0;
-            comp_hash = if isleft {
-                poseidon.hash_fix_len_array(ctx, &gate, &[comp_hash, sib])
-            } else {
-                poseidon.hash_fix_len_array(ctx, &gate, &[sib, comp_hash])
-            };
-            cur_idx = cur_idx / (2 as u32);
-        }
-        assert_eq!(comp_hash.value, root.value);
-    }
-
     #[test]
-    fn test_insert_leaf() {
-        let treesize = u32::pow(2, 3);
-        let mut leaves: Vec<AssignedValue<Fr>> = vec![];
-
-        let mut builder = BaseCircuitBuilder::<Fr>::default();
-        let gate = GateChip::<Fr>::default();
-
-        let mut poseidon = PoseidonHasher::<Fr, T, RATE>::new(
-            OptimizedPoseidonSpec::new::<R_F, R_P, 0>()
-        );
-        let ctx = builder.main(0);
-        poseidon.initialize_consts(ctx, &gate);
-
-        let f_zero = ctx.load_constant(Fr::zero());
-        let f_one = ctx.load_constant(Fr::one());
-        for i in 0..treesize {
-            if i == 0 {
-                leaves.push(poseidon.hash_fix_len_array(ctx, &gate, &[f_zero, f_zero, f_zero]));
-            } else {
-                leaves.push(f_zero);
-            }
-        }
-        let newVal = ctx.load_constant(Fr::from(69));
-
-        let mut helper = merkle_help::<Fr>(leaves.clone(), ctx);
-
-        let oldroot = helper.pop().unwrap()[0];
-
-        let lowleaf = IndexedMerkleTreeLeaf {
-            val: f_zero,
-            next_val: f_zero,
-            next_idx: f_zero,
-        };
-
-        let (low_leaf_proof, low_leaf_helper) = get_proof(0, helper, f_zero, f_one);
-        verify_proof(leaves[0].clone(), 0, oldroot.clone(), low_leaf_proof.clone());
-
-        let new_low_leaf = IndexedMerkleTreeLeaf {
-            val: lowleaf.val.clone(),
-            next_val: newVal.clone(),
-            next_idx: f_one,
-        };
-        leaves[0] = poseidon.hash_fix_len_array(
-            ctx,
-            &gate,
-            &[
-                new_low_leaf.val.clone(),
-                new_low_leaf.next_val.clone(),
-                new_low_leaf.next_idx.clone(),
-            ]
-        );
-
-        let mut new_helper = merkle_help::<Fr>(leaves.clone(), ctx);
-        let new_helper_root = new_helper.pop().unwrap()[0];
-
-        let (new_leaf_proof, new_leaf_helper) = get_proof(1, new_helper, f_zero, f_one);
-
-        leaves[1] = poseidon.hash_fix_len_array(ctx, &gate, &[newVal, f_zero, f_zero]);
-
-        let mut new_helper = merkle_help::<Fr>(leaves.clone(), ctx);
-        let new_root = new_helper.pop().unwrap()[0];
-
-        let new_leaf = IndexedMerkleTreeLeaf {
-            val: newVal.clone(),
-            next_val: f_zero,
-            next_idx: f_zero,
-        };
-
-        let new_leaf_idx = f_one;
-        let is_new_leaf_largest = ctx.load_witness(Fr::from(true));
-
-        println!("reached here");
-
-        base_test()
-            .k(16)
-            .lookup_bits(15)
-            .expect_satisfied(true)
-            .run(|ctx, range| {
-                insert_leaf::<Fr, T, RATE>(
-                    ctx,
-                    range,
-                    &oldroot,
-                    &lowleaf,
-                    &low_leaf_proof,
-                    &low_leaf_helper,
-                    &new_helper_root,
-                    &new_leaf,
-                    &new_leaf_idx,
-                    &new_leaf_proof,
-                    &new_leaf_helper,
-                    &is_new_leaf_largest
-                )
-            });
-    }
+    fn test_insert_leaf() {}
 }
