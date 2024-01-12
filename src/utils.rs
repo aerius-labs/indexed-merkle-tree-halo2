@@ -2,22 +2,28 @@ use halo2_base::utils::ScalarField;
 use pse_poseidon::Poseidon;
 
 #[derive(Debug)]
-struct MerkleTree<'a, F: ScalarField, const T: usize, const RATE: usize> {
+pub(crate) struct IndexedMerkleTree<'a, F: ScalarField, const T: usize, const RATE: usize> {
     hash: &'a mut Poseidon<F, T, RATE>,
     tree: Vec<Vec<F>>,
     root: F,
 }
 
-impl<'a, F: ScalarField, const T: usize, const RATE: usize> MerkleTree<'a, F, T, RATE> {
-    fn new(
+pub(crate) struct IndexedMerkleTreeLeaf<F: ScalarField> {
+    pub val: F,
+    pub next_val: F,
+    pub next_idx: F,
+}
+
+impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a, F, T, RATE> {
+    pub fn new(
         hash: &'a mut Poseidon<F, T, RATE>,
         leaves: Vec<F>
-    ) -> Result<MerkleTree<'a, F, T, RATE>, &'static str> {
+    ) -> Result<IndexedMerkleTree<'a, F, T, RATE>, &'static str> {
         if leaves.is_empty() {
             return Err("Cannot create Merkle Tree with no leaves");
         }
         if leaves.len() == 1 {
-            return Ok(MerkleTree {
+            return Ok(IndexedMerkleTree {
                 hash,
                 tree: vec![leaves.clone()],
                 root: leaves[0],
@@ -28,7 +34,6 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> MerkleTree<'a, F, T,
         }
 
         let mut tree = vec![leaves.clone()];
-        let mut level = 0;
         let mut current_level = leaves.clone();
 
         while current_level.len() > 1 {
@@ -37,24 +42,23 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> MerkleTree<'a, F, T,
                 let left = current_level[i];
                 let right = current_level[i + 1];
                 hash.update(&[left, right]);
-                next_level.push(hash.squeeze());
+                next_level.push(hash.squeeze_and_reset());
             }
             tree.push(next_level.clone());
             current_level = next_level.clone();
-            level += 1;
         }
-        Ok(MerkleTree {
+        Ok(IndexedMerkleTree {
             hash,
             tree,
             root: current_level[0],
         })
     }
 
-    fn get_root(&self) -> F {
+    pub fn get_root(&self) -> F {
         self.root
     }
 
-    fn get_proof(&self, index: usize) -> (Vec<F>, Vec<bool>) {
+    pub fn get_proof(&self, index: usize) -> (Vec<F>, Vec<F>) {
         let mut proof = Vec::new();
         let mut proof_helper = Vec::new();
         let mut current_index = index;
@@ -66,7 +70,7 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> MerkleTree<'a, F, T,
             let sibling = level[sibling_index];
 
             proof.push(sibling);
-            proof_helper.push(is_left_node);
+            proof_helper.push(if is_left_node { F::from(1) } else { F::from(0) });
 
             current_index /= 2;
         }
@@ -74,8 +78,8 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> MerkleTree<'a, F, T,
         (proof, proof_helper)
     }
 
-    fn verify_proof(&mut self, leaf: F, index: usize, root: F, proof: Vec<F>) -> bool {
-        let mut computed_hash = leaf;
+    pub fn verify_proof(&mut self, leaf: &F, index: usize, root: &F, proof: &Vec<F>) -> bool {
+        let mut computed_hash = leaf.clone();
         let mut current_index = index;
 
         for i in 0..proof.len() {
@@ -84,15 +88,15 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> MerkleTree<'a, F, T,
 
             computed_hash = if is_left_node {
                 self.hash.update(&[computed_hash, *proof_element]);
-                self.hash.squeeze()
+                self.hash.squeeze_and_reset()
             } else {
                 self.hash.update(&[*proof_element, computed_hash]);
-                self.hash.squeeze()
+                self.hash.squeeze_and_reset()
             };
 
             current_index /= 2;
         }
 
-        computed_hash == root
+        computed_hash == *root
     }
 }
