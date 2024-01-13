@@ -206,6 +206,8 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     );
     ctx.constrain_equal(new_root, &_new_root);
 }
+//TODO
+//Update the leaf
 
 #[cfg(test)]
 mod test {
