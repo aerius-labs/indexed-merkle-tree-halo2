@@ -207,7 +207,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     ctx.constrain_equal(new_root, &_new_root);
 }
 //TODO
-//Update the leaf
+//Update the leaf of the indexed merkle tree
 
 #[cfg(test)]
 mod test {
