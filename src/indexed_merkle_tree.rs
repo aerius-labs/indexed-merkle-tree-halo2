@@ -11,6 +11,13 @@ pub struct IndexedMerkleTreeLeaf<F: BigPrimeField> {
     next_val: AssignedValue<F>,
     next_idx: AssignedValue<F>,
 }
+impl <F:BigPrimeField>IndexedMerkleTreeLeaf<F>{
+    pub fn new( val: AssignedValue<F>,
+        next_val: AssignedValue<F>,
+        next_idx: AssignedValue<F>)->Self{
+            Self { val, next_val, next_idx }
+        }
+}
 
 // constrains s(a) + (1-s)(b) = output
 pub(crate) fn select<F: ScalarField>(
