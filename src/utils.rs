@@ -2,20 +2,20 @@ use halo2_base::utils::ScalarField;
 use pse_poseidon::Poseidon;
 
 #[derive(Debug)]
-pub(crate) struct IndexedMerkleTree<'a, F: ScalarField, const T: usize, const RATE: usize> {
+pub struct IndexedMerkleTree<'a, F: ScalarField, const T: usize, const RATE: usize> {
     hash: &'a mut Poseidon<F, T, RATE>,
     tree: Vec<Vec<F>>,
     root: F,
 }
 
-pub(crate) struct IndexedMerkleTreeLeaf<F: ScalarField> {
+pub struct IndexedMerkleTreeLeaf<F: ScalarField> {
     pub val: F,
     pub next_val: F,
     pub next_idx: F,
 }
 
 impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a, F, T, RATE> {
-    pub(crate) fn new(
+    pub fn new(
         hash: &'a mut Poseidon<F, T, RATE>,
         leaves: Vec<F>,
     ) -> Result<IndexedMerkleTree<'a, F, T, RATE>, &'static str> {
@@ -54,11 +54,11 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a
         })
     }
 
-    pub(crate) fn get_root(&self) -> F {
+    pub fn get_root(&self) -> F {
         self.root
     }
 
-    pub(crate) fn get_proof(&self, index: usize) -> (Vec<F>, Vec<F>) {
+    pub fn get_proof(&self, index: usize) -> (Vec<F>, Vec<F>) {
         let mut proof = Vec::new();
         let mut proof_helper = Vec::new();
         let mut current_index = index;
@@ -82,7 +82,7 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<'a
         (proof, proof_helper)
     }
 
-    pub(crate) fn verify_proof(&mut self, leaf: &F, index: usize, root: &F, proof: &[F]) -> bool {
+    pub fn verify_proof(&mut self, leaf: &F, index: usize, root: &F, proof: &[F]) -> bool {
         let mut computed_hash = *leaf;
         let mut current_index = index;
 

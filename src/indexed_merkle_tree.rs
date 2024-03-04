@@ -5,19 +5,24 @@ use halo2_base::{
     AssignedValue, Context,
 };
 
-
 #[derive(Clone, Debug)]
 pub struct IndexedMerkleTreeLeaf<F: BigPrimeField> {
     val: AssignedValue<F>,
     next_val: AssignedValue<F>,
     next_idx: AssignedValue<F>,
 }
-impl <F:BigPrimeField>IndexedMerkleTreeLeaf<F>{
-    pub fn new( val: AssignedValue<F>,
+impl<F: BigPrimeField> IndexedMerkleTreeLeaf<F> {
+    pub fn new(
+        val: AssignedValue<F>,
         next_val: AssignedValue<F>,
-        next_idx: AssignedValue<F>)->Self{
-            Self { val, next_val, next_idx }
+        next_idx: AssignedValue<F>,
+    ) -> Self {
+        Self {
+            val,
+            next_val,
+            next_idx,
         }
+    }
 }
 
 // constrains s(a) + (1-s)(b) = output
@@ -224,10 +229,10 @@ mod test {
     use halo2_base::utils::testing::base_test;
     use halo2_base::utils::ScalarField;
 
+    use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
     use halo2_base::{gates::GateChip, halo2_proofs::halo2curves::grumpkin::Fq as Fr, Context};
     use num_traits::pow;
     use pse_poseidon::Poseidon;
-  use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
 
     use crate::indexed_merkle_tree::{insert_leaf, IndexedMerkleTreeLeaf};
     use crate::utils::{IndexedMerkleTree, IndexedMerkleTreeLeaf as IMTLeaf};
