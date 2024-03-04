@@ -5,6 +5,7 @@ use halo2_base::{
     AssignedValue, Context,
 };
 
+
 #[derive(Clone, Debug)]
 pub struct IndexedMerkleTreeLeaf<F: BigPrimeField> {
     val: AssignedValue<F>,
@@ -226,7 +227,7 @@ mod test {
     use halo2_base::{gates::GateChip, halo2_proofs::halo2curves::grumpkin::Fq as Fr, Context};
     use num_traits::pow;
     use pse_poseidon::Poseidon;
-    use snark_verifier_sdk::halo2::OptimizedPoseidonSpec;
+  use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
 
     use crate::indexed_merkle_tree::{insert_leaf, IndexedMerkleTreeLeaf};
     use crate::utils::{IndexedMerkleTree, IndexedMerkleTreeLeaf as IMTLeaf};
