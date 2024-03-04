@@ -8,6 +8,7 @@ pub struct IndexedMerkleTree<'a, F: ScalarField, const T: usize, const RATE: usi
     root: F,
 }
 
+#[derive(Clone, Debug)]
 pub struct IndexedMerkleTreeLeaf<F: ScalarField> {
     pub val: F,
     pub next_val: F,
