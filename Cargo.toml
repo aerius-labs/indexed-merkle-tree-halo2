@@ -12,6 +12,6 @@ rand = "0.8.5"
 serde = "1.0.193"
 ark-std = "0.4.0"
 halo2-base = { git = "https://github.com/shreyas-londhe/halo2-lib.git", branch = "feat/secp256k1-hash2curve", default-features = false, features = ["halo2-axiom", "test-utils"] }
-halo2-ecc = { git = "https://github.com/shreyas-londhe/halo2-lib.git", branch = "feat/secp256k1-hash2curve", default-features = false, features = ["halo2-axiom", "mimalloc"] }
+halo2-ecc = { git = "https://github.com/shreyas-londhe/halo2-lib.git", branch = "feat/secp256k1-hash2curve", default-features = false, features = ["halo2-axiom"] }
 pse-poseidon = { git = "https://github.com/aerius-labs/pse-poseidon.git", branch = "feat/stateless-hash" }
 poseidon-rs = "0.0.10"
