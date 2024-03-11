@@ -1,9 +1,11 @@
+use ark_std::One;
 use halo2_base::{
     gates::{GateChip, GateInstructions, RangeChip, RangeInstructions},
     poseidon::hasher::PoseidonHasher,
-    utils::{BigPrimeField, ScalarField},
+    utils::{biguint_to_fe, fe_to_biguint, BigPrimeField, ScalarField},
     AssignedValue, Context,
 };
+use num_bigint::BigUint;
 
 #[derive(Clone, Debug)]
 pub struct IndexedMerkleTreeLeaf<F: BigPrimeField> {
@@ -67,6 +69,7 @@ fn verify_merkle_proof<F: BigPrimeField, const T: usize, const RATE: usize>(
     proof: &[AssignedValue<F>],
     proof_helper: &[AssignedValue<F>],
 ) {
+    println!("REASCED verify_merkle_proof");
     let computed_root = compute_merkle_root(ctx, range, hasher, leaf, proof, proof_helper);
 
     ctx.constrain_equal(&computed_root, root);
@@ -80,6 +83,7 @@ fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     proof: &[AssignedValue<F>],
     proof_helper: &[AssignedValue<F>],
 ) -> AssignedValue<F> {
+    println!("REASCED compute_merkle_root");
     let gate = range.gate();
 
     let mut computed_root = ctx.load_witness(*leaf.value());
@@ -103,14 +107,69 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     new_leaf_value: &AssignedValue<F>,
     is_new_leaf_largest: &AssignedValue<F>,
 ) {
+    println!("REASCED verify_non_inclusion");
     let gate = range.gate();
 
     let one = ctx.load_constant(F::ONE);
     let zero = ctx.load_zero();
 
     let is_zero = gate.is_equal(ctx, low_leaf.next_val, zero);
-    let is_next_val_greater =
-        range.is_less_than(ctx, *new_leaf_value, low_leaf.next_val, range.lookup_bits());
+
+    let nl_bu = fe_to_biguint(new_leaf_value.value());
+    let ll_bu = fe_to_biguint(low_leaf.next_val.value());
+
+    let pow_128: BigUint = BigUint::one() << 128;
+    let (nl_q_bu, nl_r_bu) = (
+        nl_bu.clone() / pow_128.clone(),
+        nl_bu.clone() % pow_128.clone(),
+    );
+    let (ll_q_bu, ll_r_bu) = (
+        ll_bu.clone() / pow_128.clone(),
+        ll_bu.clone() % pow_128.clone(),
+    );
+
+    assert_eq!(
+        ((nl_bu.clone() / pow_128.clone()) * (BigUint::one() << 128))
+            + nl_bu.clone() % pow_128.clone(),
+        nl_bu
+    );
+    assert_eq!(
+        ((ll_bu.clone() / pow_128.clone()) * (BigUint::one() << 128))
+            + ll_bu.clone() % pow_128.clone(),
+        ll_bu
+    );
+
+    let [nl_q, nl_r, ll_q, ll_r] = [nl_q_bu, nl_r_bu, ll_q_bu, ll_r_bu].map(|x| {
+        let f: F = biguint_to_fe(&x);
+        ctx.load_witness(f)
+    });
+    let pow_128_assign = ctx.load_constant(biguint_to_fe(&pow_128));
+
+    let valid_nl = gate.mul_add(ctx, nl_q, pow_128_assign, nl_r);
+    ctx.constrain_equal(&valid_nl, &new_leaf_value);
+    let valid_ll = gate.mul_add(ctx, ll_q, pow_128_assign, ll_r);
+    ctx.constrain_equal(&valid_ll, &low_leaf.next_val);
+
+    let is_ll_msb_gr = range.is_less_than(ctx, nl_q, ll_q, 128);
+    let are_msb_eq = gate.is_equal(ctx, nl_q, ll_q);
+
+    let is_ll_lsb_gr = range.is_less_than(ctx, nl_r, ll_r, 128);
+    let are_lsb_eq = gate.is_equal(ctx, nl_r, ll_r);
+
+    let a = is_ll_msb_gr;
+    let c_not = gate.not(ctx, are_msb_eq);
+    let a_not = gate.not(ctx, a);
+    let b = is_ll_lsb_gr;
+    let c = gate.not(ctx, c_not);
+    let d_not = gate.not(ctx, are_lsb_eq);
+
+    let rhs = [b, c, d_not]
+        .iter()
+        .fold(a_not, |a_not, x| gate.and(ctx, a_not, *x));
+    let lhs = gate.and(ctx, a, c_not);
+
+    let is_next_val_greater = gate.or(ctx, lhs, rhs);
+
     let is_true = select(
         ctx,
         gate,
@@ -135,7 +194,48 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
         low_leaf_proof_helper,
     );
 
-    range.check_less_than(ctx, low_leaf.val, *new_leaf_value, F::CAPACITY as usize);
+    // range.check_less_than(ctx, low_leaf.val, *new_leaf_value, 253 as usize);
+
+    let llv_bu = fe_to_biguint(low_leaf.val.value());
+
+    let (llv_q_bu, llv_r_bu) = (
+        llv_bu.clone() / pow_128.clone(),
+        llv_bu.clone() % pow_128.clone(),
+    );
+
+    assert_eq!(
+        ((llv_bu.clone() / pow_128.clone()) * (BigUint::one() << 128))
+            + llv_bu.clone() % pow_128.clone(),
+        llv_bu
+    );
+
+    let [llv_q, llv_r] = [llv_q_bu, llv_r_bu].map(|x| {
+        let f: F = biguint_to_fe(&x);
+        ctx.load_witness(f)
+    });
+    let valid_ll = gate.mul_add(ctx, llv_q, pow_128_assign, llv_r);
+    ctx.constrain_equal(&valid_ll, &low_leaf.val);
+    let is_llv_msb_gr = range.is_less_than(ctx, nl_q, llv_q, 128);
+    let are_msb_eq = gate.is_equal(ctx, nl_q, llv_q);
+
+    let is_llv_lsb_gr = range.is_less_than(ctx, nl_r, llv_r, 128);
+    let are_lsb_eq = gate.is_equal(ctx, nl_r, llv_r);
+
+    let a = is_llv_msb_gr;
+    let c_not = gate.not(ctx, are_msb_eq);
+    let a_not = gate.not(ctx, a);
+    let b = is_llv_lsb_gr;
+    let c = gate.not(ctx, c_not);
+    let d_not = gate.not(ctx, are_lsb_eq);
+
+    let rhs = [b, c, d_not]
+        .iter()
+        .fold(a_not, |a_not, x| gate.and(ctx, a_not, *x));
+    let lhs = gate.and(ctx, a, c_not);
+
+    let check_less_than = gate.or(ctx, lhs, rhs);
+
+    ctx.constrain_equal(&check_less_than, &zero);
 }
 
 pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
@@ -153,10 +253,12 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     new_leaf_proof_helper: &[AssignedValue<F>],
     is_new_leaf_largest: &AssignedValue<F>,
 ) {
+    println!("REACHED INSERT LEAF");
     let gate = range.gate();
 
     let zero = ctx.load_zero();
 
+    println!("1 verify_non_inclusion");
     verify_non_inclusion(
         ctx,
         range,
@@ -181,6 +283,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         &[newlowleaf.val, newlowleaf.next_val, newlowleaf.next_idx],
     );
 
+    println!("2 compute_merkle_root");
     let interim_root = compute_merkle_root(
         ctx,
         range,
@@ -190,6 +293,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         low_leaf_proof_helper,
     );
 
+    println!("3 verify_merkle_proof");
     verify_merkle_proof(
         ctx,
         range,
@@ -209,6 +313,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         &[new_leaf.val, new_leaf.next_val, new_leaf.next_idx],
     );
 
+    println!("4 compute_merkle_root");
     let _new_root = compute_merkle_root(
         ctx,
         range,
@@ -224,15 +329,21 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
+    use ark_std::One;
     use halo2_base::gates::RangeInstructions;
+    use halo2_base::halo2_proofs::arithmetic::Field;
     use halo2_base::poseidon::hasher::PoseidonHasher;
     use halo2_base::utils::testing::base_test;
-    use halo2_base::utils::ScalarField;
+    use halo2_base::utils::{biguint_to_fe, ScalarField};
 
     use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
     use halo2_base::{gates::GateChip, halo2_proofs::halo2curves::grumpkin::Fq as Fr, Context};
+    use num_bigint::{BigInt, BigUint, RandBigInt};
     use num_traits::pow;
     use pse_poseidon::Poseidon;
+    use rand::thread_rng;
 
     use crate::indexed_merkle_tree::{insert_leaf, IndexedMerkleTreeLeaf};
     use crate::utils::{IndexedMerkleTree, IndexedMerkleTreeLeaf as IMTLeaf};
@@ -282,11 +393,27 @@ mod test {
                 leaves.push(Fr::from(0u64));
             }
         }
+        native_hasher.update(&[Fr::from(187u64)]);
+        let new_val = native_hasher.squeeze_and_reset();
         let mut tree =
             IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
 
-        let new_val = Fr::from(69u64);
+        let mut rng = thread_rng();
+        let a = rng.gen_biguint(254);
+        let r = BigUint::from_str(
+            "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+        )
+        .unwrap();
+        println!("a in BigUint={:?}", a);
+        let a_gr_b = a > r;
+        println!("is a greater than the r ={:?}", a_gr_b);
+        let a = a.modpow(&BigUint::one(), &r);
+        println!("updated a value={:?}", a);
+        let a_fr: Fr = biguint_to_fe(&a);
+        println!("a_fr in Fr ={:?}", a_fr);
+        let new_val = a_fr;
 
+        println!("new_val = {:?}", new_val);
         let old_root = tree.get_root();
         let low_leaf = IMTLeaf::<Fr> {
             val: Fr::from(0u64),
@@ -332,8 +459,8 @@ mod test {
         let is_new_leaf_largest = Fr::from(true);
 
         base_test()
-            .k(14)
-            .lookup_bits(13)
+            .k(19)
+            .lookup_bits(18)
             .expect_satisfied(true)
             .run(|ctx, range| {
                 let gate = range.gate();
@@ -389,6 +516,7 @@ mod test {
                     &is_new_leaf_largest,
                 )
             });
+        let next_val_gr = new_val;
 
         // Inserting a leaf less than largest into the tree
         let new_val = Fr::from(42u64);
@@ -396,7 +524,7 @@ mod test {
         let old_root = tree.get_root();
         let low_leaf = IMTLeaf::<Fr> {
             val: Fr::from(0u64),
-            next_val: Fr::from(69u64),
+            next_val: next_val_gr,
             next_idx: Fr::from(1u64),
         };
         let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(0);
@@ -420,22 +548,24 @@ mod test {
             true
         );
 
-        native_hasher.update(&[new_val, Fr::from(69u64), Fr::from(1u64)]);
+        native_hasher.update(&[new_val, next_val_gr, Fr::from(1u64)]);
         leaves[2] = native_hasher.squeeze_and_reset();
         tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
 
         let new_root = tree.get_root();
         let new_leaf = IMTLeaf::<Fr> {
             val: new_val,
-            next_val: Fr::from(69u64),
+            next_val: next_val_gr,
             next_idx: Fr::from(1u64),
         };
         let new_leaf_index = Fr::from(2u64);
         let is_new_leaf_largest = Fr::from(false);
 
+        println!("--------------------------tet2----------------------");
+
         base_test()
-            .k(14)
-            .lookup_bits(13)
+            .k(19)
+            .lookup_bits(18)
             .expect_satisfied(true)
             .run(|ctx, range| {
                 let gate = range.gate();
@@ -491,5 +621,37 @@ mod test {
                     &is_new_leaf_largest,
                 )
             });
+    }
+    #[test]
+
+    fn test_limbs_logic() {
+        let mut rng = thread_rng();
+
+        for _ in 0..10000000 {
+            let a = rng.gen_biguint(254);
+            let b = rng.gen_biguint(254);
+
+            let pow_128: BigUint = BigUint::one() << 128;
+            let a_q = a.clone() / pow_128.clone();
+            let a_r = a.clone() % pow_128.clone();
+
+            let b_q = b.clone() / pow_128.clone();
+            let b_r = b.clone() % pow_128.clone();
+
+            let mut a_great = true;
+
+            if &a_q > &b_q {
+                a_great = true;
+            } else if &b_q > &a_q {
+                a_great = false;
+            } else {
+                if &a_r > &b_r {
+                    a_great = true;
+                } else {
+                    a_great = false;
+                }
+            }
+            assert_eq!(a_great, a > b);
+        }
     }
 }
