@@ -611,30 +611,32 @@ mod test {
         let mut rng = thread_rng();
 
         for _ in 0..10000000 {
-            let a = rng.gen_biguint(254);
-            let b = rng.gen_biguint(254);
+            let a_be = rng.gen_biguint(254);
+            let b_be = rng.gen_biguint(254);
 
             let pow_128: BigUint = BigUint::one() << 128;
-            let a_q = a.clone() / pow_128.clone();
-            let a_r = a.clone() % pow_128.clone();
+            let a_q = a_be.clone() / pow_128.clone();
+            let a_r = a_be.clone() % pow_128.clone();
 
-            let b_q = b.clone() / pow_128.clone();
-            let b_r = b.clone() % pow_128.clone();
+            let b_q = b_be.clone() / pow_128.clone();
+            let b_r = b_be.clone() % pow_128.clone();
+            
+            let is_b_msb_gr=a_q<b_q;
+            let are_msb_eq=a_q==b_q;
 
-            let mut a_great = true;
+            let is_b_lsb_gr=a_r<b_r;
+            let are_lsb_eq=a_r==b_q;
 
-            if &a_q > &b_q {
-                a_great = true;
-            } else if &b_q > &a_q {
-                a_great = false;
-            } else {
-                if &a_r > &b_r {
-                    a_great = true;
-                } else {
-                    a_great = false;
-                }
-            }
-            assert_eq!(a_great, a > b);
+            let a=is_b_msb_gr;
+            let c_not=!are_msb_eq;
+            let a_not=!a;
+            let b=is_b_lsb_gr;
+            let c=!c_not;
+            let d_not=!are_lsb_eq;
+
+            let rhs=a_not & b & c & d_not;
+            let lhs=a & c_not;
+            assert_eq!(a_be<b_be,lhs|rhs);
         }
     }
 }
