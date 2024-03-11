@@ -69,9 +69,7 @@ fn verify_merkle_proof<F: BigPrimeField, const T: usize, const RATE: usize>(
     proof: &[AssignedValue<F>],
     proof_helper: &[AssignedValue<F>],
 ) {
-    println!("REASCED verify_merkle_proof");
     let computed_root = compute_merkle_root(ctx, range, hasher, leaf, proof, proof_helper);
-
     ctx.constrain_equal(&computed_root, root);
 }
 
@@ -83,7 +81,6 @@ fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     proof: &[AssignedValue<F>],
     proof_helper: &[AssignedValue<F>],
 ) -> AssignedValue<F> {
-    println!("REASCED compute_merkle_root");
     let gate = range.gate();
 
     let mut computed_root = ctx.load_witness(*leaf.value());
@@ -94,6 +91,36 @@ fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     }
 
     computed_root
+}
+
+fn is_less_than<F:BigPrimeField>(
+    gate: &GateChip<F>,
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    a_q:AssignedValue<F>,
+    a_r:AssignedValue<F>,
+    b_q:AssignedValue<F>,
+    b_r:AssignedValue<F>,
+)-> AssignedValue<F>{
+    let is_ll_msb_gr = range.is_less_than(ctx, a_q, b_q, 128);
+    let are_msb_eq = gate.is_equal(ctx, a_q, b_q);
+
+    let is_ll_lsb_gr = range.is_less_than(ctx, a_r, b_r, 128);
+    let are_lsb_eq = gate.is_equal(ctx, a_r, b_r);
+
+    let a = is_ll_msb_gr;
+    let c_not = gate.not(ctx, are_msb_eq);
+    let a_not = gate.not(ctx, a);
+    let b = is_ll_lsb_gr;
+    let c = gate.not(ctx, c_not);
+    let d_not = gate.not(ctx, are_lsb_eq);
+
+    let rhs = [b, c, d_not]
+        .iter()
+        .fold(a_not, |a_not, x| gate.and(ctx, a_not, *x));
+    let lhs = gate.and(ctx, a, c_not);
+    gate.or(ctx, lhs, rhs)
+
 }
 
 pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>(
@@ -107,7 +134,6 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     new_leaf_value: &AssignedValue<F>,
     is_new_leaf_largest: &AssignedValue<F>,
 ) {
-    println!("REASCED verify_non_inclusion");
     let gate = range.gate();
 
     let one = ctx.load_constant(F::ONE);
@@ -150,25 +176,7 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     let valid_ll = gate.mul_add(ctx, ll_q, pow_128_assign, ll_r);
     ctx.constrain_equal(&valid_ll, &low_leaf.next_val);
 
-    let is_ll_msb_gr = range.is_less_than(ctx, nl_q, ll_q, 128);
-    let are_msb_eq = gate.is_equal(ctx, nl_q, ll_q);
-
-    let is_ll_lsb_gr = range.is_less_than(ctx, nl_r, ll_r, 128);
-    let are_lsb_eq = gate.is_equal(ctx, nl_r, ll_r);
-
-    let a = is_ll_msb_gr;
-    let c_not = gate.not(ctx, are_msb_eq);
-    let a_not = gate.not(ctx, a);
-    let b = is_ll_lsb_gr;
-    let c = gate.not(ctx, c_not);
-    let d_not = gate.not(ctx, are_lsb_eq);
-
-    let rhs = [b, c, d_not]
-        .iter()
-        .fold(a_not, |a_not, x| gate.and(ctx, a_not, *x));
-    let lhs = gate.and(ctx, a, c_not);
-
-    let is_next_val_greater = gate.or(ctx, lhs, rhs);
+    let is_next_val_greater=is_less_than(gate, ctx, range, nl_q, nl_r, ll_q, ll_r);
 
     let is_true = select(
         ctx,
@@ -194,8 +202,6 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
         low_leaf_proof_helper,
     );
 
-    // range.check_less_than(ctx, low_leaf.val, *new_leaf_value, 253 as usize);
-
     let llv_bu = fe_to_biguint(low_leaf.val.value());
 
     let (llv_q_bu, llv_r_bu) = (
@@ -213,29 +219,12 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
         let f: F = biguint_to_fe(&x);
         ctx.load_witness(f)
     });
-    let valid_ll = gate.mul_add(ctx, llv_q, pow_128_assign, llv_r);
-    ctx.constrain_equal(&valid_ll, &low_leaf.val);
-    let is_llv_msb_gr = range.is_less_than(ctx, nl_q, llv_q, 128);
-    let are_msb_eq = gate.is_equal(ctx, nl_q, llv_q);
-
-    let is_llv_lsb_gr = range.is_less_than(ctx, nl_r, llv_r, 128);
-    let are_lsb_eq = gate.is_equal(ctx, nl_r, llv_r);
-
-    let a = is_llv_msb_gr;
-    let c_not = gate.not(ctx, are_msb_eq);
-    let a_not = gate.not(ctx, a);
-    let b = is_llv_lsb_gr;
-    let c = gate.not(ctx, c_not);
-    let d_not = gate.not(ctx, are_lsb_eq);
-
-    let rhs = [b, c, d_not]
-        .iter()
-        .fold(a_not, |a_not, x| gate.and(ctx, a_not, *x));
-    let lhs = gate.and(ctx, a, c_not);
-
-    let check_less_than = gate.or(ctx, lhs, rhs);
-
-    ctx.constrain_equal(&check_less_than, &zero);
+    let valid_llv = gate.mul_add(ctx, llv_q, pow_128_assign, llv_r);
+    ctx.constrain_equal(&valid_llv, &low_leaf.val);
+    
+    let check_less_than=is_less_than(gate, ctx, range, llv_q,llv_r,nl_q, nl_r);
+    let one=ctx.load_constant(F::ONE);
+    ctx.constrain_equal(&check_less_than, &one);
 }
 
 pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
@@ -253,12 +242,10 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     new_leaf_proof_helper: &[AssignedValue<F>],
     is_new_leaf_largest: &AssignedValue<F>,
 ) {
-    println!("REACHED INSERT LEAF");
     let gate = range.gate();
 
     let zero = ctx.load_zero();
 
-    println!("1 verify_non_inclusion");
     verify_non_inclusion(
         ctx,
         range,
@@ -283,7 +270,6 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         &[newlowleaf.val, newlowleaf.next_val, newlowleaf.next_idx],
     );
 
-    println!("2 compute_merkle_root");
     let interim_root = compute_merkle_root(
         ctx,
         range,
@@ -293,7 +279,6 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         low_leaf_proof_helper,
     );
 
-    println!("3 verify_merkle_proof");
     verify_merkle_proof(
         ctx,
         range,
@@ -313,7 +298,6 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         &[new_leaf.val, new_leaf.next_val, new_leaf.next_idx],
     );
 
-    println!("4 compute_merkle_root");
     let _new_root = compute_merkle_root(
         ctx,
         range,
@@ -333,7 +317,6 @@ mod test {
 
     use ark_std::One;
     use halo2_base::gates::RangeInstructions;
-    use halo2_base::halo2_proofs::arithmetic::Field;
     use halo2_base::poseidon::hasher::PoseidonHasher;
     use halo2_base::utils::testing::base_test;
     use halo2_base::utils::{biguint_to_fe, ScalarField};
@@ -561,7 +544,7 @@ mod test {
         let new_leaf_index = Fr::from(2u64);
         let is_new_leaf_largest = Fr::from(false);
 
-        println!("--------------------------tet2----------------------");
+        println!("--------------------------test2----------------------");
 
         base_test()
             .k(19)
