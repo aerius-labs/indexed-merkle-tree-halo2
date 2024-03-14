@@ -93,15 +93,15 @@ fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     computed_root
 }
 
-fn is_less_than<F:BigPrimeField>(
+fn is_less_than<F: BigPrimeField>(
     gate: &GateChip<F>,
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
-    a_q:AssignedValue<F>,
-    a_r:AssignedValue<F>,
-    b_q:AssignedValue<F>,
-    b_r:AssignedValue<F>,
-)-> AssignedValue<F>{
+    a_q: AssignedValue<F>,
+    a_r: AssignedValue<F>,
+    b_q: AssignedValue<F>,
+    b_r: AssignedValue<F>,
+) -> AssignedValue<F> {
     let is_ll_msb_gr = range.is_less_than(ctx, a_q, b_q, 128);
     let are_msb_eq = gate.is_equal(ctx, a_q, b_q);
 
@@ -120,7 +120,6 @@ fn is_less_than<F:BigPrimeField>(
         .fold(a_not, |a_not, x| gate.and(ctx, a_not, *x));
     let lhs = gate.and(ctx, a, c_not);
     gate.or(ctx, lhs, rhs)
-
 }
 
 pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>(
@@ -176,7 +175,7 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     let valid_ll = gate.mul_add(ctx, ll_q, pow_128_assign, ll_r);
     ctx.constrain_equal(&valid_ll, &low_leaf.next_val);
 
-    let is_next_val_greater=is_less_than(gate, ctx, range, nl_q, nl_r, ll_q, ll_r);
+    let is_next_val_greater = is_less_than(gate, ctx, range, nl_q, nl_r, ll_q, ll_r);
 
     let is_true = select(
         ctx,
@@ -221,9 +220,9 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     });
     let valid_llv = gate.mul_add(ctx, llv_q, pow_128_assign, llv_r);
     ctx.constrain_equal(&valid_llv, &low_leaf.val);
-    
-    let check_less_than=is_less_than(gate, ctx, range, llv_q,llv_r,nl_q, nl_r);
-    let one=ctx.load_constant(F::ONE);
+
+    let check_less_than = is_less_than(gate, ctx, range, llv_q, llv_r, nl_q, nl_r);
+    let one = ctx.load_constant(F::ONE);
     ctx.constrain_equal(&check_less_than, &one);
 }
 
@@ -235,6 +234,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     low_leaf: &IndexedMerkleTreeLeaf<F>,
     low_leaf_proof: &[AssignedValue<F>],
     low_leaf_proof_helper: &[AssignedValue<F>],
+    new_low_leaf_proof: &[AssignedValue<F>],
     new_root: &AssignedValue<F>,
     new_leaf: &IndexedMerkleTreeLeaf<F>,
     new_leaf_index: &AssignedValue<F>,
@@ -243,8 +243,6 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     is_new_leaf_largest: &AssignedValue<F>,
 ) {
     let gate = range.gate();
-
-    let zero = ctx.load_zero();
 
     verify_non_inclusion(
         ctx,
@@ -275,20 +273,11 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         range,
         hasher,
         &new_low_leaf_hash,
-        low_leaf_proof,
+        new_low_leaf_proof,
         low_leaf_proof_helper,
     );
 
-    verify_merkle_proof(
-        ctx,
-        range,
-        hasher,
-        &interim_root,
-        &zero,
-        new_leaf_proof,
-        new_leaf_proof_helper,
-    );
-
+    ctx.constrain_equal(&interim_root, &new_root);
     ctx.constrain_equal(&new_leaf.next_val, &low_leaf.next_val);
     ctx.constrain_equal(&new_leaf.next_idx, &low_leaf.next_idx);
 
@@ -323,7 +312,7 @@ mod test {
 
     use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
     use halo2_base::{gates::GateChip, halo2_proofs::halo2curves::grumpkin::Fq as Fr, Context};
-    use num_bigint::{BigInt, BigUint, RandBigInt};
+    use num_bigint::{BigUint, RandBigInt};
     use num_traits::pow;
     use pse_poseidon::Poseidon;
     use rand::thread_rng;
@@ -376,8 +365,6 @@ mod test {
                 leaves.push(Fr::from(0u64));
             }
         }
-        native_hasher.update(&[Fr::from(187u64)]);
-        let new_val = native_hasher.squeeze_and_reset();
         let mut tree =
             IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
 
@@ -421,16 +408,18 @@ mod test {
             new_low_leaf.next_idx,
         ]);
         leaves[0] = native_hasher.squeeze_and_reset();
+
+        native_hasher.update(&[new_val, Fr::from(0u64), Fr::from(0u64)]);
+        leaves[1] = native_hasher.squeeze_and_reset();
+
         tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
+
+        let (new_low_leaf_proof, _) = tree.get_proof(0);
         let (new_leaf_proof, new_leaf_proof_helper) = tree.get_proof(1);
         assert_eq!(
             tree.verify_proof(&leaves[1], 1, &tree.get_root(), &new_leaf_proof),
             true
         );
-
-        native_hasher.update(&[new_val, Fr::from(0u64), Fr::from(0u64)]);
-        leaves[1] = native_hasher.squeeze_and_reset();
-        tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
 
         let new_root = tree.get_root();
         let new_leaf = IMTLeaf::<Fr> {
@@ -482,6 +471,10 @@ mod test {
                     .iter()
                     .map(|x| ctx.load_witness(*x))
                     .collect::<Vec<_>>();
+                let new_low_leaf_proof = new_low_leaf_proof
+                    .iter()
+                    .map(|x| ctx.load_witness(*x))
+                    .collect::<Vec<_>>();
 
                 insert_leaf::<Fr, T, RATE>(
                     ctx,
@@ -491,6 +484,7 @@ mod test {
                     &low_leaf,
                     &low_leaf_proof,
                     &low_leaf_proof_helper,
+                    &new_low_leaf_proof,
                     &new_root,
                     &new_leaf,
                     &new_leaf_index,
@@ -524,16 +518,22 @@ mod test {
             new_low_leaf.next_idx,
         ]);
         leaves[0] = native_hasher.squeeze_and_reset();
+
+        native_hasher.update(&[new_val, next_val_gr, Fr::from(1u64)]);
+        leaves[2] = native_hasher.squeeze_and_reset();
         tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
+
+        let (new_low_leaf_proof, _) = tree.get_proof(0);
+
         let (new_leaf_proof, new_leaf_proof_helper) = tree.get_proof(2);
         assert_eq!(
             tree.verify_proof(&leaves[2], 2, &tree.get_root(), &new_leaf_proof),
             true
         );
 
-        native_hasher.update(&[new_val, next_val_gr, Fr::from(1u64)]);
-        leaves[2] = native_hasher.squeeze_and_reset();
-        tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
+        // native_hasher.update(&[new_val, next_val_gr, Fr::from(1u64)]);
+        // leaves[2] = native_hasher.squeeze_and_reset();
+        // tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
 
         let new_root = tree.get_root();
         let new_leaf = IMTLeaf::<Fr> {
@@ -587,6 +587,10 @@ mod test {
                     .iter()
                     .map(|x| ctx.load_witness(*x))
                     .collect::<Vec<_>>();
+                let new_low_leaf_proof = new_low_leaf_proof
+                    .iter()
+                    .map(|x| ctx.load_witness(*x))
+                    .collect::<Vec<_>>();
 
                 insert_leaf::<Fr, T, RATE>(
                     ctx,
@@ -596,6 +600,7 @@ mod test {
                     &low_leaf,
                     &low_leaf_proof,
                     &low_leaf_proof_helper,
+                    &new_low_leaf_proof,
                     &new_root,
                     &new_leaf,
                     &new_leaf_index,
@@ -620,23 +625,23 @@ mod test {
 
             let b_q = b_be.clone() / pow_128.clone();
             let b_r = b_be.clone() % pow_128.clone();
-            
-            let is_b_msb_gr=a_q<b_q;
-            let are_msb_eq=a_q==b_q;
 
-            let is_b_lsb_gr=a_r<b_r;
-            let are_lsb_eq=a_r==b_q;
+            let is_b_msb_gr = a_q < b_q;
+            let are_msb_eq = a_q == b_q;
 
-            let a=is_b_msb_gr;
-            let c_not=!are_msb_eq;
-            let a_not=!a;
-            let b=is_b_lsb_gr;
-            let c=!c_not;
-            let d_not=!are_lsb_eq;
+            let is_b_lsb_gr = a_r < b_r;
+            let are_lsb_eq = a_r == b_q;
 
-            let rhs=a_not & b & c & d_not;
-            let lhs=a & c_not;
-            assert_eq!(a_be<b_be,lhs|rhs);
+            let a = is_b_msb_gr;
+            let c_not = !are_msb_eq;
+            let a_not = !a;
+            let b = is_b_lsb_gr;
+            let c = !c_not;
+            let d_not = !are_lsb_eq;
+
+            let rhs = a_not & b & c & d_not;
+            let lhs = a & c_not;
+            assert_eq!(a_be < b_be, lhs | rhs);
         }
     }
 }
