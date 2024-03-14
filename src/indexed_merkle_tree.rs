@@ -297,8 +297,6 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     );
     ctx.constrain_equal(new_root, &_new_root);
 }
-//TODO
-//Update the leaf of the indexed merkle tree
 
 #[cfg(test)]
 mod test {
@@ -357,13 +355,9 @@ mod test {
         let mut native_hasher = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
 
         // Filling leaves with dfault values.
-        for i in 0..tree_size {
-            if i == 0 {
-                native_hasher.update(&[Fr::from(0u64), Fr::from(0u64), Fr::from(0u64)]);
-                leaves.push(native_hasher.squeeze_and_reset());
-            } else {
-                leaves.push(Fr::from(0u64));
-            }
+        for _ in 0..tree_size {
+            native_hasher.update(&[Fr::from(0u64), Fr::from(0u64), Fr::from(0u64)]);
+            leaves.push(native_hasher.squeeze_and_reset());
         }
         let mut tree =
             IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
@@ -374,16 +368,10 @@ mod test {
             "21888242871839275222246405745257275088548364400416034343698204186575808495617",
         )
         .unwrap();
-        println!("a in BigUint={:?}", a);
-        let a_gr_b = a > r;
-        println!("is a greater than the r ={:?}", a_gr_b);
         let a = a.modpow(&BigUint::one(), &r);
-        println!("updated a value={:?}", a);
         let a_fr: Fr = biguint_to_fe(&a);
-        println!("a_fr in Fr ={:?}", a_fr);
         let new_val = a_fr;
 
-        println!("new_val = {:?}", new_val);
         let old_root = tree.get_root();
         let low_leaf = IMTLeaf::<Fr> {
             val: Fr::from(0u64),
@@ -396,7 +384,6 @@ mod test {
             true
         );
 
-        // compute interim state change
         let new_low_leaf = IMTLeaf::<Fr> {
             val: low_leaf.val,
             next_val: new_val,
@@ -506,7 +493,6 @@ mod test {
         };
         let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(0);
 
-        // compute interim state change
         let new_low_leaf = IMTLeaf::<Fr> {
             val: low_leaf.val,
             next_val: new_val,
@@ -531,9 +517,6 @@ mod test {
             true
         );
 
-        // native_hasher.update(&[new_val, next_val_gr, Fr::from(1u64)]);
-        // leaves[2] = native_hasher.squeeze_and_reset();
-        // tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
 
         let new_root = tree.get_root();
         let new_leaf = IMTLeaf::<Fr> {
