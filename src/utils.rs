@@ -1,5 +1,6 @@
 use halo2_base::utils::ScalarField;
 use pse_poseidon::Poseidon;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub struct IndexedMerkleTree<'a, F: ScalarField, const T: usize, const RATE: usize> {
@@ -8,7 +9,7 @@ pub struct IndexedMerkleTree<'a, F: ScalarField, const T: usize, const RATE: usi
     root: F,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IndexedMerkleTreeLeaf<F: ScalarField> {
     pub val: F,
     pub next_val: F,
