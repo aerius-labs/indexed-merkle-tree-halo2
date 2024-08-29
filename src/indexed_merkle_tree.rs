@@ -313,6 +313,68 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     ctx.constrain_equal(new_root, &_new_root);
 }
 
+pub fn dynamic_insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    hasher: &PoseidonHasher<F, T, RATE>,
+    old_root: &AssignedValue<F>,
+    low_leaf: &IndexedMerkleTreeLeaf<F>,
+    low_leaf_proof: &[AssignedValue<F>],
+    low_leaf_proof_helper: &[AssignedValue<F>],
+    new_root: &AssignedValue<F>,
+    new_leaf: &IndexedMerkleTreeLeaf<F>,
+    new_leaf_index: &AssignedValue<F>,
+    new_leaf_proof: &[AssignedValue<F>],
+    new_leaf_proof_helper: &[AssignedValue<F>],
+) {
+    let gate = range.gate();
+
+    let low_leaf_hash = hasher.hash_fix_len_array(
+        ctx,
+        gate,
+        &[low_leaf.val, low_leaf.next_val, low_leaf.next_idx],
+    );
+    let computed_old_root = compute_merkle_root(
+        ctx,
+        range,
+        hasher,
+        &low_leaf_hash,
+        low_leaf_proof,
+        low_leaf_proof_helper,
+    );
+
+    // old root
+    ctx.constrain_equal(&computed_old_root, old_root);
+
+    // ( leaf value > low leaf value)
+    let is_greater = range.is_less_than(ctx, low_leaf.val, new_leaf.val, 256);
+    let one = ctx.load_constant(F::ONE);
+    ctx.constrain_equal(&is_greater, &one);
+
+    // new_leaf.next_idx = low_leaf.next_idx
+    // new_leaf.next_val = low_leaf.next_val
+    ctx.constrain_equal(&new_leaf.next_idx, &low_leaf.next_idx);
+    ctx.constrain_equal(&new_leaf.next_val, &low_leaf.next_val);
+
+    let new_leaf_hash = hasher.hash_fix_len_array(
+        ctx,
+        gate,
+        &[new_leaf.val, new_leaf.next_val, new_leaf.next_idx],
+    );
+
+    // new root
+    let computed_new_root = compute_merkle_root(
+        ctx,
+        range,
+        hasher,
+        &new_leaf_hash,
+        new_leaf_proof,
+        new_leaf_proof_helper,
+    );
+
+    ctx.constrain_equal(&computed_new_root, new_root);
+    ctx.constrain_equal(new_leaf_index, &new_leaf.next_idx);
+}
 #[cfg(test)]
 mod test {
     use std::str::FromStr;
