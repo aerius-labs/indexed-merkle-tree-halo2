@@ -88,7 +88,8 @@ fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     let mut computed_root = ctx.load_witness(*leaf.value());
 
     for (proof_element, helper) in proof.iter().zip(proof_helper.iter()) {
-        let inp = dual_mux(ctx, gate, &computed_root, proof_element, helper);
+        let inp = dual_mux(ctx, gate, proof_element, &computed_root, helper);
+        // dbg!(inp.iter().map(|x| x.value()).collect::<Vec<_>>());
         computed_root = hasher.hash_fix_len_array(ctx, gate, &inp);
     }
 
@@ -380,19 +381,24 @@ mod test {
     use std::str::FromStr;
 
     use ark_std::One;
-    use halo2_base::gates::RangeInstructions;
+    use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
     use halo2_base::poseidon::hasher::PoseidonHasher;
     use halo2_base::utils::testing::base_test;
     use halo2_base::utils::{biguint_to_fe, ScalarField};
 
-    use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
-    use halo2_base::{gates::GateChip, halo2_proofs::halo2curves::grumpkin::Fq as Fr, Context};
+    use halo2_base::{
+        gates::{GateChip, GateInstructions, RangeChip, RangeInstructions},
+        halo2_proofs::halo2curves::grumpkin::Fq as Fr,
+        Context,
+    };
     use num_bigint::{BigUint, RandBigInt};
     use num_traits::pow;
     use pse_poseidon::Poseidon;
     use rand::thread_rng;
 
-    use crate::indexed_merkle_tree::{dynamic_insert_leaf, insert_leaf, IndexedMerkleTreeLeaf};
+    use crate::indexed_merkle_tree::{
+        compute_merkle_root, insert_leaf, verify_merkle_proof, IndexedMerkleTreeLeaf,
+    };
     use crate::utils::{IndexedMerkleTree, IndexedMerkleTreeLeaf as IMTLeaf};
 
     fn select_circuit<F: ScalarField>(ctx: &mut Context<F>, s: bool, a: F, b: F) {
@@ -417,6 +423,70 @@ mod test {
         base_test().k(9).expect_satisfied(true).run(|ctx, _| {
             select_circuit(ctx, s, Fr::from(a), Fr::from(b));
         })
+    }
+
+    #[test]
+    fn test_compute_merkle_root() {
+        base_test().k(9).expect_satisfied(true).run(|ctx, range| {
+            const T: usize = 3;
+            const RATE: usize = 2;
+            const R_F: usize = 8;
+            const R_P: usize = 57;
+
+            let mut hasher =
+                PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+            let gate = range.gate();
+
+            hasher.initialize_consts(ctx, gate);
+            let leaf_value = Fr::from(99u64);
+            let leaf = ctx.load_witness(leaf_value);
+
+            let proof = vec![
+                Fr::from(1u64),
+                Fr::from(5u64),
+                Fr::from(6u64),
+                Fr::from(9u64),
+                Fr::from(9u64),
+            ];
+
+            let proof_helper = vec![
+                Fr::from(0u64),
+                Fr::from(0u64),
+                Fr::from(0u64),
+                Fr::from(0u64),
+                Fr::from(0u64),
+            ];
+
+            let proof_assigned = proof
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            let proof_helper_assigned = proof_helper
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            // Call the function
+            let computed_root = compute_merkle_root::<Fr, T, RATE>(
+                ctx,
+                range,
+                &hasher,
+                &leaf,
+                &proof_assigned,
+                &proof_helper_assigned,
+            );
+
+            verify_merkle_proof(
+                ctx,
+                range,
+                &hasher,
+                &computed_root,
+                &leaf,
+                &proof_assigned,
+                &proof_helper_assigned,
+            )
+        });
     }
 
     #[test]
