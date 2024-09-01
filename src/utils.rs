@@ -87,10 +87,10 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
         index: usize,
     ) -> (Vec<F>, Vec<F>) {
         let mut current_index = index;
-
         if self.nodes[0].len() >= index {
             self.nodes[0].push(F::ZERO);
         }
+
         self.nodes[0][index] = leaf;
         let mut cur_leaf = leaf;
 
@@ -115,15 +115,17 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
 
             let parent_leaf_idx = current_index.clone() / 2;
 
+            // for the last level, we need to add a new node which zero
             if self.nodes[i + 1].len() <= parent_leaf_idx {
                 self.nodes[i + 1].push(F::ZERO);
             }
+
             self.nodes[i + 1][parent_leaf_idx] = if is_left_node {
                 proof_helper.push(F::ONE);
                 hash.update(&[cur_leaf, sibling]);
                 hash.squeeze_and_reset()
             } else {
-                proof_helper.push(F::ONE);
+                proof_helper.push(F::ZERO);
                 hash.update(&[sibling, cur_leaf]);
                 hash.squeeze_and_reset()
             };
@@ -160,7 +162,6 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
 
             current_index /= 2;
         }
-
         (proof, proof_helper)
     }
 
@@ -192,6 +193,29 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
         computed_hash == *root
     }
 
+    pub fn compute_merkle_root(
+        &mut self,
+        hash: &'a mut Poseidon<F, T, RATE>,
+        leaf: &F,
+        proof: &[F],
+        proof_helper: &[F],
+    ) -> F {
+        let k = proof.len();
+        let mut digest = F::from(leaf.clone());
+        for i in 0..k {
+            let proof_element = &proof[i];
+            if proof_helper[i] == F::ZERO {
+                hash.update(&[digest, *proof_element]);
+                digest = hash.squeeze_and_reset();
+            } else {
+                hash.update(&[*proof_element, digest]);
+                digest = hash.squeeze_and_reset();
+            }
+        }
+
+        digest
+    }
+
     pub fn print_tree(&mut self) {
         for level in self.nodes.iter() {
             for node in level {
@@ -207,9 +231,55 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use halo2_base::halo2_proofs::halo2curves::grumpkin::Fq as F;
+    use halo2_base::{halo2_proofs::halo2curves::grumpkin::Fq as F, utils::biguint_to_fe};
+    use num_bigint::BigUint;
+    use num_traits::FromBytes;
     use pse_poseidon::Poseidon;
 
+    #[test]
+    fn test_native_merkle_root() {
+        let leaf = F::from(99u64);
+
+        const T: usize = 3;
+        const RATE: usize = 2;
+        const R_F: usize = 8;
+        const R_P: usize = 57;
+        let mut hash = Poseidon::<F, T, RATE>::new(R_F, R_P);
+
+        let proof: [F; 5] = [
+            F::from(1u64),
+            F::from(5u64),
+            F::from(6u64),
+            F::from(9u64),
+            F::from(9u64),
+        ];
+
+        let proof_helper: [F; 5] = [
+            F::from(0u64),
+            F::from(0u64),
+            F::from(0u64),
+            F::from(0u64),
+            F::from(0u64),
+        ];
+        let depth = 3;
+        let mut tree = IndexedMerkleTree::<F, 3, 2>::new_default_leaf(depth);
+        tree.insert_leaf(&mut hash, F::from(1u64), 0);
+        tree.insert_leaf(&mut hash, F::from(5u64), 0);
+        tree.insert_leaf(&mut hash, F::from(6u64), 0);
+        tree.insert_leaf(&mut hash, F::from(9u64), 0);
+        tree.insert_leaf(&mut hash, F::from(9u64), 0);
+
+        let root = tree.compute_merkle_root(&mut hash, &leaf, &proof, &proof_helper);
+
+        let expected_root_bigint = BigUint::from_be_bytes(&[
+            0x0d, 0xf9, 0x98, 0x5c, 0x44, 0x8d, 0x16, 0x7c, 0xde, 0x83, 0x68, 0xf8, 0x78, 0x96,
+            0x50, 0x44, 0xf1, 0xb5, 0x2e, 0x80, 0xa5, 0xc7, 0x42, 0x04, 0x65, 0x19, 0x1e, 0xaa,
+            0x89, 0x64, 0x77, 0x5a,
+        ]);
+        let expected_root: F = biguint_to_fe(&expected_root_bigint);
+
+        assert_eq!(root, expected_root);
+    }
     #[test]
     fn test_insert_leaves() {
         const T: usize = 3;
@@ -221,18 +291,20 @@ mod tests {
         let depth = 3;
         let mut tree = IndexedMerkleTree::<F, 3, 2>::new_default_leaf(depth);
 
-        assert_eq!(tree.nodes.len(), depth + 1);
+        tree.insert_leaf(&mut hash, F::from(5), 0);
+        tree.insert_leaf(&mut hash, F::from(6), 1);
+        tree.insert_leaf(&mut hash, F::from(9), 2);
+        tree.insert_leaf(&mut hash, F::from(9), 3);
 
-        tree.insert_leaf(&mut hash, F::from(10), 0);
-        tree.insert_leaf(&mut hash, F::from(30), 1);
-        tree.insert_leaf(&mut hash, F::from(50), 2);
-        tree.insert_leaf(&mut hash, F::from(20), 3);
+        assert_eq!(tree.get_leaf_at_index(0), F::from(5));
+        assert_eq!(tree.get_leaf_at_index(1), F::from(6));
+        assert_eq!(tree.get_leaf_at_index(2), F::from(9));
+        assert_eq!(tree.get_leaf_at_index(3), F::from(9));
 
-        assert_eq!(tree.get_leaf_at_index(0), F::from(10));
-        assert_eq!(tree.get_leaf_at_index(1), F::from(30));
-        assert_eq!(tree.get_leaf_at_index(2), F::from(50));
-        assert_eq!(tree.get_leaf_at_index(3), F::from(20));
-        // dbg!(tree);
-        tree.print_tree();
+        let (proof, _) = tree.get_proof(3);
+
+        let expected_root = tree.get_root();
+        let result = tree.verify_proof(&mut hash, 3, &expected_root, &proof);
+        assert_eq!(result, true);
     }
 }
