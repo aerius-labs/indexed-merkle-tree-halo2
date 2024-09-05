@@ -86,8 +86,7 @@ pub fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     let mut computed_root = ctx.load_witness(*leaf.value());
 
     for (proof_element, helper) in proof.iter().zip(proof_helper.iter()) {
-        let inp = dual_mux(ctx, gate, proof_element, &computed_root, helper);
-        // dbg!(inp.iter().map(|x| x.value()).collect::<Vec<_>>());
+        let inp = dual_mux(ctx, gate, &computed_root, proof_element, helper);
         computed_root = hasher.hash_fix_len_array(ctx, gate, &inp);
     }
 

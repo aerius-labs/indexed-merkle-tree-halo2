@@ -205,10 +205,10 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
         for i in 0..k {
             let proof_element = &proof[i];
             if proof_helper[i] == F::ZERO {
-                hash.update(&[digest, *proof_element]);
+                hash.update(&[*proof_element, digest]);
                 digest = hash.squeeze_and_reset();
             } else {
-                hash.update(&[*proof_element, digest]);
+                hash.update(&[digest, *proof_element]);
                 digest = hash.squeeze_and_reset();
             }
         }
@@ -225,6 +225,15 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
         }
 
         println!("depth --- {:?}", self.nodes.len());
+    }
+
+    pub fn hash_leaf(
+        &mut self,
+        hash: &'a mut Poseidon<F, T, RATE>,
+        leaf: IndexedMerkleTreeLeaf<F>,
+    ) -> F {
+        hash.update(&[leaf.val, leaf.next_val, leaf.next_idx]);
+        hash.squeeze_and_reset()
     }
 }
 
@@ -256,10 +265,10 @@ mod tests {
 
         let proof_helper: [F; 5] = [
             F::from(0u64),
-            F::from(0u64),
-            F::from(0u64),
-            F::from(0u64),
-            F::from(0u64),
+            F::from(1u64),
+            F::from(1u64),
+            F::from(1u64),
+            F::from(1u64),
         ];
         let depth = 3;
         let mut tree = IndexedMerkleTree::<F, 3, 2>::new_default_leaf(depth);
@@ -272,9 +281,9 @@ mod tests {
         let root = tree.compute_merkle_root(&mut hash, &leaf, &proof, &proof_helper);
 
         let expected_root_bigint = BigUint::from_be_bytes(&[
-            0x0d, 0xf9, 0x98, 0x5c, 0x44, 0x8d, 0x16, 0x7c, 0xde, 0x83, 0x68, 0xf8, 0x78, 0x96,
-            0x50, 0x44, 0xf1, 0xb5, 0x2e, 0x80, 0xa5, 0xc7, 0x42, 0x04, 0x65, 0x19, 0x1e, 0xaa,
-            0x89, 0x64, 0x77, 0x5a,
+            0x05, 0x5e, 0xc2, 0x46, 0xf4, 0xf1, 0x7b, 0xef, 0x9e, 0xeb, 0x24, 0xa6, 0xa3, 0x98,
+            0x78, 0xfa, 0x43, 0x77, 0x29, 0x07, 0x23, 0xca, 0x68, 0xcd, 0x07, 0x18, 0xe9, 0x39,
+            0x9d, 0xd9, 0x29, 0xa5,
         ]);
         let expected_root: F = biguint_to_fe(&expected_root_bigint);
 
