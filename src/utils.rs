@@ -115,7 +115,6 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
 
             let parent_leaf_idx = current_index.clone() / 2;
 
-            // for the last level, we need to add a new node which zero
             if self.nodes[i + 1].len() <= parent_leaf_idx {
                 self.nodes[i + 1].push(F::ZERO);
             }
@@ -200,20 +199,24 @@ impl<'a, F: ScalarField, const T: usize, const RATE: usize> IndexedMerkleTree<F,
         proof: &[F],
         proof_helper: &[F],
     ) -> F {
-        let k = proof.len();
-        let mut digest = F::from(leaf.clone());
-        for i in 0..k {
-            let proof_element = &proof[i];
-            if proof_helper[i] == F::ZERO {
-                hash.update(&[*proof_element, digest]);
-                digest = hash.squeeze_and_reset();
+        let mut current = *leaf;
+
+        for (&proof_element, &is_right) in proof.iter().zip(proof_helper.iter()) {
+            if current == proof_element {
+                current = F::ZERO;
             } else {
-                hash.update(&[digest, *proof_element]);
-                digest = hash.squeeze_and_reset();
+                let (left, right) = if is_right == F::ZERO {
+                    (proof_element, current)
+                } else {
+                    (current, proof_element)
+                };
+
+                hash.update(&[left, right]);
+                current = hash.squeeze_and_reset();
             }
         }
 
-        digest
+        current
     }
 
     pub fn print_tree(&mut self) {
@@ -290,7 +293,7 @@ mod tests {
         assert_eq!(root, expected_root);
     }
     #[test]
-    fn test_insert_leaves() {
+    fn test_insert_leaves_native() {
         const T: usize = 3;
         const RATE: usize = 2;
         const R_F: usize = 8;
