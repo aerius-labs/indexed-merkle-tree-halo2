@@ -68,12 +68,21 @@ pub fn verify_merkle_proof<F: BigPrimeField, const T: usize, const RATE: usize>(
     leaf: &AssignedValue<F>,
     proof: &[AssignedValue<F>],
     proof_helper: &[AssignedValue<F>],
+    zero: &AssignedValue<F>,
+    one: &AssignedValue<F>,
+    is_intermediate: bool,
 ) {
-    let computed_root = compute_merkle_root(ctx, range, hasher, leaf, proof, proof_helper);
-    ctx.constrain_equal(&computed_root, root);
+    if is_intermediate {
+        let computed_root =
+            calculate_intermediate_root(ctx, range, hasher, leaf, proof, proof_helper, zero, one);
+        ctx.constrain_equal(&computed_root, root);
+    } else {
+        let computed_root = calculate_merkle_root(ctx, range, hasher, leaf, proof, proof_helper);
+        ctx.constrain_equal(&computed_root, root);
+    }
 }
 
-pub fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
+pub fn calculate_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     hasher: &PoseidonHasher<F, T, RATE>,
@@ -82,16 +91,35 @@ pub fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     proof_helper: &[AssignedValue<F>],
 ) -> AssignedValue<F> {
     let gate = range.gate();
+    let mut computed_root = *leaf;
+
+    for (proof_element, helper) in proof.iter().zip(proof_helper.iter()) {
+        let inp = dual_mux(ctx, gate, &computed_root, proof_element, helper);
+        computed_root = hasher.hash_fix_len_array(ctx, gate, &inp);
+    }
+
+    computed_root
+}
+
+pub fn calculate_intermediate_root<F: BigPrimeField, const T: usize, const RATE: usize>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    hasher: &PoseidonHasher<F, T, RATE>,
+    leaf: &AssignedValue<F>,
+    proof: &[AssignedValue<F>],
+    proof_helper: &[AssignedValue<F>],
+    zero: &AssignedValue<F>,
+    one: &AssignedValue<F>,
+) -> AssignedValue<F> {
+    let gate = range.gate();
 
     let mut computed_root = ctx.load_witness(*leaf.value());
-    let zero = ctx.load_constant(F::ZERO);
-    let one = ctx.load_constant(F::ONE);
+
     for (proof_element, helper) in proof.iter().zip(proof_helper.iter()) {
         let is_equal = gate.is_equal(ctx, computed_root, *proof_element);
         let inp = dual_mux(ctx, gate, &computed_root, proof_element, helper);
-
-        let hash_zero = hasher.hash_fix_len_array(ctx, gate, &inp);
-        computed_root = select(ctx, gate, one, is_equal, zero, hash_zero);
+        let sibling_hash = hasher.hash_fix_len_array(ctx, gate, &inp);
+        computed_root = select(ctx, gate, *one, is_equal, *zero, sibling_hash);
     }
 
     computed_root
@@ -136,13 +164,12 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     low_leaf_proof_helper: &[AssignedValue<F>],
     new_leaf_value: &AssignedValue<F>,
     is_new_leaf_largest: &AssignedValue<F>,
+    zero: &AssignedValue<F>,
+    one: &AssignedValue<F>,
 ) {
     let gate = range.gate();
 
-    let one = ctx.load_constant(F::ONE);
-    let zero = ctx.load_zero();
-
-    let is_zero = gate.is_equal(ctx, low_leaf.next_val, zero);
+    let is_zero = gate.is_equal(ctx, low_leaf.next_val, *zero);
 
     let nl_bu = fe_to_biguint(new_leaf_value.value());
     let ll_bu = fe_to_biguint(low_leaf.next_val.value());
@@ -184,7 +211,7 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     let is_true = select(
         ctx,
         gate,
-        one,
+        *one,
         *is_new_leaf_largest,
         is_zero,
         is_next_val_greater,
@@ -204,6 +231,9 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
         &low_leaf_hash,
         low_leaf_proof,
         low_leaf_proof_helper,
+        &zero,
+        &one,
+        false,
     );
 
     let llv_bu = fe_to_biguint(low_leaf.val.value());
@@ -247,22 +277,8 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     is_new_leaf_largest: &AssignedValue<F>,
 ) {
     let gate = range.gate();
-
-    let low_leaf_hash = hasher.hash_fix_len_array(
-        ctx,
-        gate,
-        &[low_leaf.val, low_leaf.next_val, low_leaf.next_idx],
-    );
-
-    let _old_root = compute_merkle_root(
-        ctx,
-        range,
-        hasher,
-        &low_leaf_hash,
-        low_leaf_proof,
-        low_leaf_proof_helper,
-    );
-    ctx.constrain_equal(&_old_root, old_root);
+    let zero = ctx.load_constant(F::ZERO);
+    let one = ctx.load_constant(F::ONE);
 
     verify_non_inclusion(
         ctx,
@@ -274,6 +290,8 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         low_leaf_proof_helper,
         &new_leaf.val,
         is_new_leaf_largest,
+        &zero,
+        &one,
     );
 
     let new_low_leaf = IndexedMerkleTreeLeaf {
@@ -292,25 +310,28 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         ],
     );
 
-    let interim_root = compute_merkle_root(
+    let interim_root = calculate_intermediate_root(
         ctx,
         range,
         hasher,
         &new_low_leaf_hash,
         low_leaf_proof,
         low_leaf_proof_helper,
+        &zero,
+        &one,
     );
-
-    let zero_assigned = ctx.load_constant(F::from(0u64));
 
     verify_merkle_proof(
         ctx,
         range,
         hasher,
         &interim_root,
-        &zero_assigned,
+        &zero,
         new_leaf_proof,
         new_leaf_proof_helper,
+        &zero,
+        &one,
+        true,
     );
 
     ctx.constrain_equal(&new_leaf.next_val, &low_leaf.next_val);
@@ -322,7 +343,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         &[new_leaf.val, new_leaf.next_val, new_leaf.next_idx],
     );
 
-    let _new_root = compute_merkle_root(
+    let _new_root = calculate_merkle_root(
         ctx,
         range,
         hasher,
@@ -352,7 +373,7 @@ mod test {
     use rand::thread_rng;
 
     use crate::indexed_merkle_tree::{
-        compute_merkle_root, insert_leaf, verify_merkle_proof, verify_non_inclusion,
+        calculate_merkle_root, insert_leaf, verify_merkle_proof, verify_non_inclusion,
         IndexedMerkleTreeLeaf,
     };
     use crate::utils::{
@@ -385,7 +406,7 @@ mod test {
     }
 
     #[test]
-    fn test_compute_merkle_root() {
+    fn test_calculate_merkle_root() {
         const T: usize = 3;
         const RATE: usize = 2;
         const R_F: usize = 8;
@@ -418,12 +439,6 @@ mod test {
         let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(1);
 
         let leaf_value = nullifier_hashes[1];
-        let _ = tree.compute_merkle_root(
-            &mut hash,
-            &leaf_value,
-            &low_leaf_proof,
-            &low_leaf_proof_helper,
-        );
 
         base_test().k(9).expect_satisfied(true).run(|ctx, range| {
             let mut hasher =
@@ -442,7 +457,10 @@ mod test {
                 .map(|&x| ctx.load_witness(x))
                 .collect::<Vec<_>>();
 
-            let computed_root = compute_merkle_root::<Fr, T, RATE>(
+            let zero_assigned = ctx.load_witness(Fr::zero());
+            let one_assigned = ctx.load_witness(Fr::one());
+
+            let computed_root = calculate_merkle_root::<Fr, T, RATE>(
                 ctx,
                 range,
                 &hasher,
@@ -459,6 +477,9 @@ mod test {
                 &leaf,
                 &proof_assigned,
                 &proof_helper_assigned,
+                &zero_assigned,
+                &one_assigned,
+                false,
             );
         });
     }
@@ -517,6 +538,9 @@ mod test {
                 .map(|&x| ctx.load_witness(x))
                 .collect::<Vec<_>>();
 
+            let zero_assigned = ctx.load_witness(Fr::zero());
+            let one_assigned = ctx.load_witness(Fr::one());
+
             verify_merkle_proof(
                 ctx,
                 range,
@@ -525,6 +549,9 @@ mod test {
                 &leaf,
                 &proof_assigned,
                 &proof_helper_assigned,
+                &zero_assigned,
+                &one_assigned,
+                false,
             );
         });
     }
@@ -590,6 +617,9 @@ mod test {
                 .map(|&x| ctx.load_witness(x))
                 .collect::<Vec<_>>();
 
+            let zero_assigned = ctx.load_witness(Fr::zero());
+            let one_assigned = ctx.load_witness(Fr::one());
+
             verify_non_inclusion(
                 ctx,
                 range,
@@ -600,6 +630,8 @@ mod test {
                 &proof_helper_assigned,
                 &new_leaf_value_assigned,
                 &is_new_leaf_largest_assigned,
+                &zero_assigned,
+                &one_assigned,
             );
         });
     }
@@ -610,7 +642,7 @@ mod test {
         const R_F: usize = 8;
         const R_P: usize = 57;
 
-        let depth = 8;
+        let depth = 30;
 
         let mut native_hasher = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
 
