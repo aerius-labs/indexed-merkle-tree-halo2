@@ -163,7 +163,6 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     low_leaf_proof: &[AssignedValue<F>],
     low_leaf_proof_helper: &[AssignedValue<F>],
     new_leaf_value: &AssignedValue<F>,
-    is_new_leaf_largest: &AssignedValue<F>,
     zero: &AssignedValue<F>,
     one: &AssignedValue<F>,
 ) {
@@ -208,17 +207,8 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
 
     let is_next_val_greater = is_less_than(gate, ctx, range, nl_q, nl_r, ll_q, ll_r);
 
-    let is_true = select(
-        ctx,
-        gate,
-        *one,
-        *is_new_leaf_largest,
-        is_zero,
-        is_next_val_greater,
-    );
-
-    assert_eq!(is_true.value(), &F::ONE);
-    ctx.constrain_equal(&is_true, &one);
+    let condition = gate.or(ctx, is_zero, is_next_val_greater);
+    ctx.constrain_equal(&condition, one);
 
     let inp = [low_leaf.val, low_leaf.next_val, low_leaf.next_idx];
     let low_leaf_hash = hasher.hash_fix_len_array(ctx, gate, &inp);
@@ -274,7 +264,6 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     new_leaf_index: &AssignedValue<F>,
     new_leaf_proof: &[AssignedValue<F>],
     new_leaf_proof_helper: &[AssignedValue<F>],
-    is_new_leaf_largest: &AssignedValue<F>,
 ) {
     let gate = range.gate();
     let zero = ctx.load_constant(F::ZERO);
@@ -289,7 +278,6 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         low_leaf_proof,
         low_leaf_proof_helper,
         &new_leaf.val,
-        is_new_leaf_largest,
         &zero,
         &one,
     );
@@ -600,7 +588,6 @@ mod test {
             let root = ctx.load_witness(root);
 
             let new_leaf_value_assigned = ctx.load_witness(new_leaf_value);
-            let is_new_leaf_largest_assigned = ctx.load_witness(Fr::from(false));
             let low_leaf = IndexedMerkleTreeLeaf {
                 val: ctx.load_witness(nullifier_preimages[1][0]),
                 next_val: ctx.load_witness(nullifier_preimages[1][1]),
@@ -629,7 +616,6 @@ mod test {
                 &proof_assigned,
                 &proof_helper_assigned,
                 &new_leaf_value_assigned,
-                &is_new_leaf_largest_assigned,
                 &zero_assigned,
                 &one_assigned,
             );
@@ -685,8 +671,6 @@ mod test {
 
         let new_root = tree.get_root();
 
-        let is_new_leaf_largest = Fr::from(true);
-
         base_test().k(19).expect_satisfied(true).run(|ctx, range| {
             let gate = range.gate();
             let mut hasher =
@@ -730,7 +714,6 @@ mod test {
                 .collect::<Vec<_>>();
 
             let new_leaf_index = ctx.load_witness(Fr::from(1));
-            let is_new_leaf_largest = ctx.load_witness(is_new_leaf_largest);
 
             insert_leaf::<Fr, 3, 2>(
                 ctx,
@@ -745,7 +728,6 @@ mod test {
                 &new_leaf_index,
                 &new_leaf_proof,
                 &new_leaf_proof_helper,
-                &is_new_leaf_largest,
             )
         });
     }
@@ -789,7 +771,7 @@ mod test {
         const R_F: usize = 8;
         const R_P: usize = 57;
 
-        let depth = 8;
+        let depth = 30;
         let new_vals = [
             Fr::from(74),
             Fr::from(58),
@@ -854,13 +836,6 @@ mod test {
 
             let new_root = tree.get_root();
 
-            let is_new_leaf_largest = if nullifier_tree_preimages[round + 1].next_val == Fr::zero()
-            {
-                Fr::from(true)
-            } else {
-                Fr::from(false)
-            };
-
             base_test()
                 .k(19)
                 .lookup_bits(18)
@@ -908,7 +883,6 @@ mod test {
                         .collect::<Vec<_>>();
 
                     let new_leaf_index = ctx.load_witness(Fr::from((round + 1) as u64));
-                    let is_new_leaf_largest = ctx.load_witness(is_new_leaf_largest);
 
                     insert_leaf::<Fr, 3, 2>(
                         ctx,
@@ -923,7 +897,6 @@ mod test {
                         &new_leaf_index,
                         &new_leaf_proof,
                         &new_leaf_proof_helper,
-                        &is_new_leaf_largest,
                     )
                 });
         }
