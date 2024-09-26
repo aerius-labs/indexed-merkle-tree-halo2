@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use ark_std::One;
 use halo2_base::{
     gates::{GateChip, GateInstructions, RangeChip, RangeInstructions},
@@ -62,7 +60,7 @@ pub(crate) fn dual_mux<F: ScalarField>(
     [left, right]
 }
 
-fn verify_merkle_proof<F: BigPrimeField, const T: usize, const RATE: usize>(
+pub fn verify_merkle_proof<F: BigPrimeField, const T: usize, const RATE: usize>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     hasher: &PoseidonHasher<F, T, RATE>,
@@ -70,12 +68,21 @@ fn verify_merkle_proof<F: BigPrimeField, const T: usize, const RATE: usize>(
     leaf: &AssignedValue<F>,
     proof: &[AssignedValue<F>],
     proof_helper: &[AssignedValue<F>],
+    zero: &AssignedValue<F>,
+    one: &AssignedValue<F>,
+    is_intermediate: bool,
 ) {
-    let computed_root = compute_merkle_root(ctx, range, hasher, leaf, proof, proof_helper);
-    ctx.constrain_equal(&computed_root, root);
+    if is_intermediate {
+        let computed_root =
+            calculate_intermediate_root(ctx, range, hasher, leaf, proof, proof_helper, zero, one);
+        ctx.constrain_equal(&computed_root, root);
+    } else {
+        let computed_root = calculate_merkle_root(ctx, range, hasher, leaf, proof, proof_helper);
+        ctx.constrain_equal(&computed_root, root);
+    }
 }
 
-fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
+pub fn calculate_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     hasher: &PoseidonHasher<F, T, RATE>,
@@ -84,8 +91,7 @@ fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     proof_helper: &[AssignedValue<F>],
 ) -> AssignedValue<F> {
     let gate = range.gate();
-
-    let mut computed_root = ctx.load_witness(*leaf.value());
+    let mut computed_root = *leaf;
 
     for (proof_element, helper) in proof.iter().zip(proof_helper.iter()) {
         let inp = dual_mux(ctx, gate, &computed_root, proof_element, helper);
@@ -95,7 +101,31 @@ fn compute_merkle_root<F: BigPrimeField, const T: usize, const RATE: usize>(
     computed_root
 }
 
-fn is_less_than<F: BigPrimeField>(
+pub fn calculate_intermediate_root<F: BigPrimeField, const T: usize, const RATE: usize>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    hasher: &PoseidonHasher<F, T, RATE>,
+    leaf: &AssignedValue<F>,
+    proof: &[AssignedValue<F>],
+    proof_helper: &[AssignedValue<F>],
+    zero: &AssignedValue<F>,
+    one: &AssignedValue<F>,
+) -> AssignedValue<F> {
+    let gate = range.gate();
+
+    let mut computed_root = ctx.load_witness(*leaf.value());
+
+    for (proof_element, helper) in proof.iter().zip(proof_helper.iter()) {
+        let is_equal = gate.is_equal(ctx, computed_root, *proof_element);
+        let inp = dual_mux(ctx, gate, &computed_root, proof_element, helper);
+        let sibling_hash = hasher.hash_fix_len_array(ctx, gate, &inp);
+        computed_root = select(ctx, gate, *one, is_equal, *zero, sibling_hash);
+    }
+
+    computed_root
+}
+
+pub fn is_less_than<F: BigPrimeField>(
     gate: &GateChip<F>,
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -133,14 +163,12 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
     low_leaf_proof: &[AssignedValue<F>],
     low_leaf_proof_helper: &[AssignedValue<F>],
     new_leaf_value: &AssignedValue<F>,
-    is_new_leaf_largest: &AssignedValue<F>,
+    zero: &AssignedValue<F>,
+    one: &AssignedValue<F>,
 ) {
     let gate = range.gate();
 
-    let one = ctx.load_constant(F::ONE);
-    let zero = ctx.load_zero();
-
-    let is_zero = gate.is_equal(ctx, low_leaf.next_val, zero);
+    let is_zero = gate.is_equal(ctx, low_leaf.next_val, *zero);
 
     let nl_bu = fe_to_biguint(new_leaf_value.value());
     let ll_bu = fe_to_biguint(low_leaf.next_val.value());
@@ -179,16 +207,8 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
 
     let is_next_val_greater = is_less_than(gate, ctx, range, nl_q, nl_r, ll_q, ll_r);
 
-    let is_true = select(
-        ctx,
-        gate,
-        one,
-        *is_new_leaf_largest,
-        is_zero,
-        is_next_val_greater,
-    );
-    assert_eq!(is_true.value(), &F::ONE);
-    ctx.constrain_equal(&is_true, &one);
+    let condition = gate.or(ctx, is_zero, is_next_val_greater);
+    ctx.constrain_equal(&condition, one);
 
     let inp = [low_leaf.val, low_leaf.next_val, low_leaf.next_idx];
     let low_leaf_hash = hasher.hash_fix_len_array(ctx, gate, &inp);
@@ -201,6 +221,9 @@ pub fn verify_non_inclusion<F: BigPrimeField, const T: usize, const RATE: usize>
         &low_leaf_hash,
         low_leaf_proof,
         low_leaf_proof_helper,
+        &zero,
+        &one,
+        false,
     );
 
     let llv_bu = fe_to_biguint(low_leaf.val.value());
@@ -241,14 +264,10 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
     new_leaf_index: &AssignedValue<F>,
     new_leaf_proof: &[AssignedValue<F>],
     new_leaf_proof_helper: &[AssignedValue<F>],
-    is_new_leaf_largest: &AssignedValue<F>,
 ) {
     let gate = range.gate();
-    let zero_hash_be = BigUint::from_str(
-        "1960587138944869480785025106734196872454309951825657414575195034687326603497",
-    )
-    .unwrap();
-    let zero_leaf_hash = ctx.load_constant(biguint_to_fe::<F>(&zero_hash_be));
+    let zero = ctx.load_constant(F::ZERO);
+    let one = ctx.load_constant(F::ONE);
 
     verify_non_inclusion(
         ctx,
@@ -259,28 +278,35 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         low_leaf_proof,
         low_leaf_proof_helper,
         &new_leaf.val,
-        is_new_leaf_largest,
+        &zero,
+        &one,
     );
 
-    let newlowleaf = IndexedMerkleTreeLeaf {
+    let new_low_leaf = IndexedMerkleTreeLeaf {
         val: low_leaf.val,
-        next_idx: *new_leaf_index,
         next_val: new_leaf.val,
+        next_idx: *new_leaf_index,
     };
 
     let new_low_leaf_hash = hasher.hash_fix_len_array(
         ctx,
         gate,
-        &[newlowleaf.val, newlowleaf.next_val, newlowleaf.next_idx],
+        &[
+            new_low_leaf.val,
+            new_low_leaf.next_val,
+            new_low_leaf.next_idx,
+        ],
     );
 
-    let interim_root = compute_merkle_root(
+    let interim_root = calculate_intermediate_root(
         ctx,
         range,
         hasher,
         &new_low_leaf_hash,
         low_leaf_proof,
         low_leaf_proof_helper,
+        &zero,
+        &one,
     );
 
     verify_merkle_proof(
@@ -288,9 +314,12 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         range,
         hasher,
         &interim_root,
-        &zero_leaf_hash,
+        &zero,
         new_leaf_proof,
         new_leaf_proof_helper,
+        &zero,
+        &one,
+        true,
     );
 
     ctx.constrain_equal(&new_leaf.next_val, &low_leaf.next_val);
@@ -302,7 +331,7 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
         &[new_leaf.val, new_leaf.next_val, new_leaf.next_idx],
     );
 
-    let _new_root = compute_merkle_root(
+    let _new_root = calculate_merkle_root(
         ctx,
         range,
         hasher,
@@ -315,23 +344,30 @@ pub fn insert_leaf<F: BigPrimeField, const T: usize, const RATE: usize>(
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
 
     use ark_std::One;
-    use halo2_base::gates::RangeInstructions;
+    use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
     use halo2_base::poseidon::hasher::PoseidonHasher;
     use halo2_base::utils::testing::base_test;
-    use halo2_base::utils::{biguint_to_fe, ScalarField};
+    use halo2_base::utils::ScalarField;
 
-    use halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec;
-    use halo2_base::{gates::GateChip, halo2_proofs::halo2curves::grumpkin::Fq as Fr, Context};
+    use halo2_base::{
+        gates::{GateChip, RangeInstructions},
+        halo2_proofs::halo2curves::grumpkin::Fq as Fr,
+        Context,
+    };
     use num_bigint::{BigUint, RandBigInt};
-    use num_traits::pow;
     use pse_poseidon::Poseidon;
     use rand::thread_rng;
 
-    use crate::indexed_merkle_tree::{insert_leaf, IndexedMerkleTreeLeaf};
-    use crate::utils::{IndexedMerkleTree, IndexedMerkleTreeLeaf as IMTLeaf};
+    use crate::indexed_merkle_tree::{
+        calculate_merkle_root, insert_leaf, verify_merkle_proof, verify_non_inclusion,
+        IndexedMerkleTreeLeaf,
+    };
+    use crate::utils::{
+        get_low_leaf_idx, update_sparse_idx_leaf, IndexedMerkleTree,
+        IndexedMerkleTreeLeaf as IMTLeaf,
+    };
 
     fn select_circuit<F: ScalarField>(ctx: &mut Context<F>, s: bool, a: F, b: F) {
         let gate = GateChip::<F>::default();
@@ -358,244 +394,344 @@ mod test {
     }
 
     #[test]
+    fn test_calculate_merkle_root() {
+        const T: usize = 3;
+        const RATE: usize = 2;
+        const R_F: usize = 8;
+        const R_P: usize = 57;
+
+        let nullifier_preimages = [
+            [Fr::from(10u64), Fr::from(20u64), Fr::from(1u64)],
+            [Fr::from(20u64), Fr::from(30u64), Fr::from(2u64)],
+            [Fr::from(30u64), Fr::from(0u64), Fr::from(0u64)],
+        ];
+
+        let mut tree = IndexedMerkleTree::<Fr, T, RATE>::new_default_leaf(8);
+        let mut hash = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
+
+        let mut nullifier_hashes: [Fr; 3] = [Fr::default(); 3];
+
+        for i in 0..nullifier_preimages.len() {
+            hash.update(&[
+                nullifier_preimages[i][0],
+                nullifier_preimages[i][1],
+                nullifier_preimages[i][2],
+            ]);
+            nullifier_hashes[i] = hash.squeeze_and_reset();
+        }
+
+        tree.insert_leaf(&mut hash, nullifier_hashes[0], 0);
+        tree.insert_leaf(&mut hash, nullifier_hashes[1], 1);
+        tree.insert_leaf(&mut hash, nullifier_hashes[2], 2);
+
+        let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(1);
+
+        let leaf_value = nullifier_hashes[1];
+
+        base_test().k(9).expect_satisfied(true).run(|ctx, range| {
+            let mut hasher =
+                PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+            let gate = range.gate();
+
+            hasher.initialize_consts(ctx, gate);
+            let leaf = ctx.load_witness(leaf_value);
+            let proof_assigned = low_leaf_proof
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            let proof_helper_assigned = low_leaf_proof_helper
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            let zero_assigned = ctx.load_witness(Fr::zero());
+            let one_assigned = ctx.load_witness(Fr::one());
+
+            let computed_root = calculate_merkle_root::<Fr, T, RATE>(
+                ctx,
+                range,
+                &hasher,
+                &leaf,
+                &proof_assigned,
+                &proof_helper_assigned,
+            );
+
+            verify_merkle_proof(
+                ctx,
+                range,
+                &hasher,
+                &computed_root,
+                &leaf,
+                &proof_assigned,
+                &proof_helper_assigned,
+                &zero_assigned,
+                &one_assigned,
+                false,
+            );
+        });
+    }
+
+    #[test]
+    fn test_verify_merkle_proof() {
+        const T: usize = 3;
+        const RATE: usize = 2;
+        const R_F: usize = 8;
+        const R_P: usize = 57;
+
+        let nullifier_preimages = [
+            [Fr::from(10u64), Fr::from(20u64), Fr::from(1u64)],
+            [Fr::from(20u64), Fr::from(30u64), Fr::from(2u64)],
+            [Fr::from(30u64), Fr::from(0u64), Fr::from(0u64)],
+        ];
+
+        let mut tree = IndexedMerkleTree::<Fr, T, RATE>::new_default_leaf(8);
+        let mut hash = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
+
+        let mut nullifier_hashes: [Fr; 3] = [Fr::default(); 3];
+
+        for i in 0..nullifier_preimages.len() {
+            hash.update(&[
+                nullifier_preimages[i][0],
+                nullifier_preimages[i][1],
+                nullifier_preimages[i][2],
+            ]);
+            nullifier_hashes[i] = hash.squeeze_and_reset();
+        }
+
+        tree.insert_leaf(&mut hash, nullifier_hashes[0], 0);
+        tree.insert_leaf(&mut hash, nullifier_hashes[1], 1);
+        tree.insert_leaf(&mut hash, nullifier_hashes[2], 2);
+
+        let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(1);
+
+        let leaf_value = nullifier_hashes[1];
+        let root = tree.get_root();
+
+        base_test().k(10).expect_satisfied(true).run(|ctx, range| {
+            let mut hasher =
+                PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+            let gate = range.gate();
+
+            hasher.initialize_consts(ctx, gate);
+            let leaf = ctx.load_witness(leaf_value);
+            let root = ctx.load_witness(root);
+            let proof_assigned = low_leaf_proof
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            let proof_helper_assigned = low_leaf_proof_helper
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            let zero_assigned = ctx.load_witness(Fr::zero());
+            let one_assigned = ctx.load_witness(Fr::one());
+
+            verify_merkle_proof(
+                ctx,
+                range,
+                &hasher,
+                &root,
+                &leaf,
+                &proof_assigned,
+                &proof_helper_assigned,
+                &zero_assigned,
+                &one_assigned,
+                false,
+            );
+        });
+    }
+    #[test]
+    fn test_verify_non_inclusion() {
+        const T: usize = 3;
+        const RATE: usize = 2;
+        const R_F: usize = 8;
+        const R_P: usize = 57;
+
+        let nullifier_preimages = [
+            [Fr::from(10u64), Fr::from(20u64), Fr::from(1u64)],
+            [Fr::from(20u64), Fr::from(30u64), Fr::from(2u64)],
+            [Fr::from(30u64), Fr::from(0u64), Fr::from(0u64)],
+        ];
+
+        let mut tree = IndexedMerkleTree::<Fr, T, RATE>::new_default_leaf(8);
+        let mut hash = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
+
+        let mut nullifier_hashes: [Fr; 3] = [Fr::default(); 3];
+
+        for i in 0..nullifier_preimages.len() {
+            hash.update(&[
+                nullifier_preimages[i][0],
+                nullifier_preimages[i][1],
+                nullifier_preimages[i][2],
+            ]);
+            nullifier_hashes[i] = hash.squeeze_and_reset();
+        }
+
+        tree.insert_leaf(&mut hash, nullifier_hashes[0], 0);
+        tree.insert_leaf(&mut hash, nullifier_hashes[1], 1);
+        tree.insert_leaf(&mut hash, nullifier_hashes[2], 2);
+
+        let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(1);
+
+        let root = tree.get_root();
+        let new_leaf_value = Fr::from(25);
+
+        base_test().k(19).expect_satisfied(true).run(|ctx, range| {
+            let mut hasher =
+                PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
+            let gate = range.gate();
+
+            hasher.initialize_consts(ctx, gate);
+            let root = ctx.load_witness(root);
+
+            let new_leaf_value_assigned = ctx.load_witness(new_leaf_value);
+            let low_leaf = IndexedMerkleTreeLeaf {
+                val: ctx.load_witness(nullifier_preimages[1][0]),
+                next_val: ctx.load_witness(nullifier_preimages[1][1]),
+                next_idx: ctx.load_witness(nullifier_preimages[1][2]),
+            };
+
+            let proof_assigned = low_leaf_proof
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            let proof_helper_assigned = low_leaf_proof_helper
+                .iter()
+                .map(|&x| ctx.load_witness(x))
+                .collect::<Vec<_>>();
+
+            let zero_assigned = ctx.load_witness(Fr::zero());
+            let one_assigned = ctx.load_witness(Fr::one());
+
+            verify_non_inclusion(
+                ctx,
+                range,
+                &hasher,
+                &root,
+                &low_leaf,
+                &proof_assigned,
+                &proof_helper_assigned,
+                &new_leaf_value_assigned,
+                &zero_assigned,
+                &one_assigned,
+            );
+        });
+    }
+    #[test]
     fn test_insert_leaf() {
         const T: usize = 3;
         const RATE: usize = 2;
         const R_F: usize = 8;
         const R_P: usize = 57;
 
-        let tree_size = pow(2, 3);
-        let mut leaves = Vec::<Fr>::new();
+        let depth = 30;
 
         let mut native_hasher = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
 
-        // Filling leaves with dfault values.
-        for _ in 0..tree_size {
-            native_hasher.update(&[Fr::from(0u64), Fr::from(0u64), Fr::from(0u64)]);
-            leaves.push(native_hasher.squeeze_and_reset());
-        }
-        let mut tree =
-            IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
+        let mut nullifier_tree_preimages = vec![
+            IMTLeaf {
+                val: Fr::from(0u64),
+                next_val: Fr::from(0u64),
+                next_idx: Fr::from(0u64),
+            },
+            IMTLeaf {
+                val: Fr::from(10u64),
+                next_val: Fr::from(0u64),
+                next_idx: Fr::from(0u64),
+            },
+        ];
 
-        let mut rng = thread_rng();
-        let a = rng.gen_biguint(254);
-        let r = BigUint::from_str(
-            "21888242871839275222246405745257275088548364400416034343698204186575808495617",
-        )
-        .unwrap();
-        let a = a.modpow(&BigUint::one(), &r);
-        let a_fr: Fr = biguint_to_fe(&a);
-        let new_val = a_fr;
+        let mut tree = IndexedMerkleTree::<Fr, T, RATE>::new_default_leaf(depth);
+        let init_idx_leaf = hash_leaf(&nullifier_tree_preimages[0]);
 
-        let old_root = tree.get_root();
-        let low_leaf = IMTLeaf::<Fr> {
-            val: Fr::from(0u64),
-            next_val: Fr::from(0u64),
-            next_idx: Fr::from(0u64),
-        };
-        let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(0);
-        assert_eq!(
-            tree.verify_proof(&leaves[0], 0, &tree.get_root(), &low_leaf_proof),
-            true
-        );
-
-        let new_low_leaf = IMTLeaf::<Fr> {
-            val: low_leaf.val,
-            next_val: new_val,
-            next_idx: Fr::from(1u64),
-        };
-        native_hasher.update(&[
-            new_low_leaf.val,
-            new_low_leaf.next_val,
-            new_low_leaf.next_idx,
-        ]);
-        leaves[0] = native_hasher.squeeze_and_reset();
-
-        native_hasher.update(&[new_val, Fr::from(0u64), Fr::from(0u64)]);
-        leaves[1] = native_hasher.squeeze_and_reset();
-
-        tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
-
-        let (new_leaf_proof, new_leaf_proof_helper) = tree.get_proof(1);
-        assert_eq!(
-            tree.verify_proof(&leaves[1], 1, &tree.get_root(), &new_leaf_proof),
-            true
-        );
-
-        let new_root = tree.get_root();
-        let new_leaf = IMTLeaf::<Fr> {
-            val: new_val,
-            next_val: Fr::from(0u64),
-            next_idx: Fr::from(0u64),
-        };
-        let new_leaf_index = Fr::from(1u64);
-        let is_new_leaf_largest = Fr::from(true);
-
-        base_test()
-            .k(19)
-            .lookup_bits(18)
-            .expect_satisfied(true)
-            .run(|ctx, range| {
-                let gate = range.gate();
-                let mut hasher =
-                    PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
-                hasher.initialize_consts(ctx, gate);
-
-                let old_root = ctx.load_witness(old_root);
-                let low_leaf = IndexedMerkleTreeLeaf {
-                    val: ctx.load_witness(low_leaf.val),
-                    next_val: ctx.load_witness(low_leaf.next_val),
-                    next_idx: ctx.load_witness(low_leaf.next_idx),
-                };
-                let new_root = ctx.load_witness(new_root);
-                let new_leaf = IndexedMerkleTreeLeaf {
-                    val: ctx.load_witness(new_leaf.val),
-                    next_val: ctx.load_witness(new_leaf.next_val),
-                    next_idx: ctx.load_witness(new_leaf.next_idx),
-                };
-                let new_leaf_index = ctx.load_witness(new_leaf_index);
-                let is_new_leaf_largest = ctx.load_witness(is_new_leaf_largest);
-
-                let low_leaf_proof = low_leaf_proof
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
-                let low_leaf_proof_helper = low_leaf_proof_helper
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
-                let new_leaf_proof = new_leaf_proof
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
-                let new_leaf_proof_helper = new_leaf_proof_helper
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
-
-                insert_leaf::<Fr, T, RATE>(
-                    ctx,
-                    range,
-                    &hasher,
-                    &old_root,
-                    &low_leaf,
-                    &low_leaf_proof,
-                    &low_leaf_proof_helper,
-                    &new_root,
-                    &new_leaf,
-                    &new_leaf_index,
-                    &new_leaf_proof,
-                    &new_leaf_proof_helper,
-                    &is_new_leaf_largest,
-                )
-            });
-        let next_val_gr = new_val;
-
-        // Inserting a leaf less than largest into the tree
-        let new_val = Fr::from(42u64);
+        tree.insert_leaf(&mut native_hasher, init_idx_leaf, 0);
 
         let old_root = tree.get_root();
-        let low_leaf = IMTLeaf::<Fr> {
-            val: Fr::from(0u64),
-            next_val: next_val_gr,
-            next_idx: Fr::from(1u64),
-        };
-        let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(0);
+        let new_val = Fr::from(74);
 
-        let new_low_leaf = IMTLeaf::<Fr> {
-            val: low_leaf.val,
-            next_val: new_val,
-            next_idx: Fr::from(2u64),
-        };
-        native_hasher.update(&[
-            new_low_leaf.val,
-            new_low_leaf.next_val,
-            new_low_leaf.next_idx,
-        ]);
-        leaves[0] = native_hasher.squeeze_and_reset();
+        let low_leaf_idx = 0;
+        let idx_low_leaf = nullifier_tree_preimages[low_leaf_idx].clone();
 
-        native_hasher.update(&[new_val, next_val_gr, Fr::from(1u64)]);
-        leaves[2] = native_hasher.squeeze_and_reset();
-        tree = IndexedMerkleTree::<Fr, T, RATE>::new(&mut native_hasher, leaves.clone()).unwrap();
+        let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(low_leaf_idx);
 
-        let (new_leaf_proof, new_leaf_proof_helper) = tree.get_proof(2);
-        assert_eq!(
-            tree.verify_proof(&leaves[2], 2, &tree.get_root(), &new_leaf_proof),
-            true
-        );
+        update_sparse_idx_leaf(&mut nullifier_tree_preimages, new_val, 1);
+
+        let new_low_leaf = hash_leaf(&nullifier_tree_preimages[low_leaf_idx]);
+
+        tree.insert_leaf(&mut native_hasher, new_low_leaf, low_leaf_idx);
+
+        let new_leaf_hash = hash_leaf(&nullifier_tree_preimages[1]);
+
+        let (new_leaf_proof, new_leaf_proof_helper) =
+            tree.insert_leaf(&mut native_hasher, new_leaf_hash, 1);
 
         let new_root = tree.get_root();
-        let new_leaf = IMTLeaf::<Fr> {
-            val: new_val,
-            next_val: next_val_gr,
-            next_idx: Fr::from(1u64),
-        };
-        let new_leaf_index = Fr::from(2u64);
-        let is_new_leaf_largest = Fr::from(false);
 
-        println!("--------------------------test2----------------------");
+        base_test().k(19).expect_satisfied(true).run(|ctx, range| {
+            let gate = range.gate();
+            let mut hasher =
+                PoseidonHasher::<Fr, 3, 2>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
+            hasher.initialize_consts(ctx, gate);
 
-        base_test()
-            .k(19)
-            .lookup_bits(18)
-            .expect_satisfied(true)
-            .run(|ctx, range| {
-                let gate = range.gate();
-                let mut hasher =
-                    PoseidonHasher::<Fr, T, RATE>::new(OptimizedPoseidonSpec::new::<R_F, R_P, 0>());
-                hasher.initialize_consts(ctx, gate);
+            let old_root = ctx.load_witness(old_root);
 
-                let old_root = ctx.load_witness(old_root);
-                let low_leaf = IndexedMerkleTreeLeaf {
-                    val: ctx.load_witness(low_leaf.val),
-                    next_val: ctx.load_witness(low_leaf.next_val),
-                    next_idx: ctx.load_witness(low_leaf.next_idx),
-                };
-                let new_root = ctx.load_witness(new_root);
-                let new_leaf = IndexedMerkleTreeLeaf {
-                    val: ctx.load_witness(new_leaf.val),
-                    next_val: ctx.load_witness(new_leaf.next_val),
-                    next_idx: ctx.load_witness(new_leaf.next_idx),
-                };
-                let new_leaf_index = ctx.load_witness(new_leaf_index);
-                let is_new_leaf_largest = ctx.load_witness(is_new_leaf_largest);
+            let low_leaf = IndexedMerkleTreeLeaf {
+                val: ctx.load_witness(idx_low_leaf.val),
+                next_val: ctx.load_witness(idx_low_leaf.next_val),
+                next_idx: ctx.load_witness(idx_low_leaf.next_idx),
+            };
 
-                let low_leaf_proof = low_leaf_proof
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
-                let low_leaf_proof_helper = low_leaf_proof_helper
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
-                let new_leaf_proof = new_leaf_proof
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
-                let new_leaf_proof_helper = new_leaf_proof_helper
-                    .iter()
-                    .map(|x| ctx.load_witness(*x))
-                    .collect::<Vec<_>>();
+            let low_leaf_proof = low_leaf_proof
+                .iter()
+                .map(|x| ctx.load_witness(*x))
+                .collect::<Vec<_>>();
 
-                insert_leaf::<Fr, T, RATE>(
-                    ctx,
-                    range,
-                    &hasher,
-                    &old_root,
-                    &low_leaf,
-                    &low_leaf_proof,
-                    &low_leaf_proof_helper,
-                    &new_root,
-                    &new_leaf,
-                    &new_leaf_index,
-                    &new_leaf_proof,
-                    &new_leaf_proof_helper,
-                    &is_new_leaf_largest,
-                )
-            });
+            let low_leaf_proof_helper = low_leaf_proof_helper
+                .iter()
+                .map(|x| ctx.load_witness(*x))
+                .collect::<Vec<_>>();
+
+            let new_root = ctx.load_witness(new_root);
+
+            let new_leaf = IndexedMerkleTreeLeaf {
+                val: ctx.load_witness(nullifier_tree_preimages[1].val),
+                next_val: ctx.load_witness(nullifier_tree_preimages[1].next_val),
+                next_idx: ctx.load_witness(nullifier_tree_preimages[1].next_idx),
+            };
+
+            let new_leaf_proof = new_leaf_proof
+                .iter()
+                .map(|x| ctx.load_witness(*x))
+                .collect::<Vec<_>>();
+
+            let new_leaf_proof_helper = new_leaf_proof_helper
+                .iter()
+                .map(|x| ctx.load_witness(*x))
+                .collect::<Vec<_>>();
+
+            let new_leaf_index = ctx.load_witness(Fr::from(1));
+
+            insert_leaf::<Fr, 3, 2>(
+                ctx,
+                range,
+                &hasher,
+                &old_root,
+                &low_leaf,
+                &low_leaf_proof,
+                &low_leaf_proof_helper,
+                &new_root,
+                &new_leaf,
+                &new_leaf_index,
+                &new_leaf_proof,
+                &new_leaf_proof_helper,
+            )
+        });
     }
     #[test]
-
     fn test_limbs_logic() {
         let mut rng = thread_rng();
 
@@ -628,35 +764,152 @@ mod test {
             assert_eq!(a_be < b_be, lhs | rhs);
         }
     }
+    #[test]
+    fn test_insert_leaf_multiple_round() {
+        const T: usize = 3;
+        const RATE: usize = 2;
+        const R_F: usize = 8;
+        const R_P: usize = 57;
 
-    fn update_idx_leaf(
-        leaves: Vec<IMTLeaf<Fr>>,
-        new_val: Fr,
-        new_val_idx: u64,
-    ) -> (Vec<IMTLeaf<Fr>>, usize) {
-        let mut nullifier_tree_preimages = leaves.clone();
-        let mut low_leaf_idx = 0;
-        for (i, node) in leaves.iter().enumerate() {
-            if node.next_val == Fr::zero() && i == 0 {
-                nullifier_tree_preimages[i + 1].val = new_val;
-                nullifier_tree_preimages[i].next_val = new_val;
-                nullifier_tree_preimages[i].next_idx = Fr::from(i as u64 + 1);
-                low_leaf_idx = i;
-                break;
-            }
-            if node.val < new_val && (node.next_val > new_val || node.next_val == Fr::zero()) {
-                nullifier_tree_preimages[new_val_idx as usize].val = new_val;
-                nullifier_tree_preimages[new_val_idx as usize].next_val =
-                    nullifier_tree_preimages[i].next_val;
-                nullifier_tree_preimages[new_val_idx as usize].next_idx =
-                    nullifier_tree_preimages[i].next_idx;
-                nullifier_tree_preimages[i].next_val = new_val;
-                nullifier_tree_preimages[i].next_idx = Fr::from(new_val_idx);
-                low_leaf_idx = i;
-                break;
-            }
+        let depth = 30;
+        let new_vals = [
+            Fr::from(74),
+            Fr::from(58),
+            Fr::from(77),
+            Fr::from(95),
+            Fr::from(60),
+            Fr::from(9),
+            Fr::from(79),
+            Fr::from(10),
+            Fr::from(30),
+            Fr::from(57),
+            Fr::from(56),
+            Fr::from(51),
+            Fr::from(44),
+            Fr::from(11),
+            Fr::from(1),
+            Fr::from(22),
+            Fr::from(55),
+            Fr::from(13),
+            Fr::from(90),
+            Fr::from(26),
+        ];
+
+        let mut native_hasher = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
+
+        let mut nullifier_tree_preimages = (0..new_vals.len() + 1)
+            .map(|_| IMTLeaf {
+                val: Fr::from(0u64),
+                next_val: Fr::from(0u64),
+                next_idx: Fr::from(0u64),
+            })
+            .collect::<Vec<_>>();
+
+        let mut low_leaf_idx;
+
+        let mut tree = IndexedMerkleTree::<Fr, T, RATE>::new_default_leaf(depth);
+        let init_idx_leaf = hash_leaf(&nullifier_tree_preimages[0]);
+
+        tree.insert_leaf(&mut native_hasher, init_idx_leaf, 0);
+
+        for (round, new_val) in new_vals.iter().enumerate() {
+            println!("---------------round[{}]----------------", round);
+
+            low_leaf_idx = get_low_leaf_idx(&nullifier_tree_preimages, *new_val);
+
+            let idx_low_leaf = nullifier_tree_preimages[low_leaf_idx].clone();
+
+            let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(low_leaf_idx);
+
+            let old_root = tree.get_root();
+
+            update_sparse_idx_leaf(&mut nullifier_tree_preimages, *new_val, (round as u64) + 1);
+
+            let new_low_leaf = hash_leaf(&nullifier_tree_preimages[low_leaf_idx]);
+
+            tree.insert_leaf(&mut native_hasher, new_low_leaf, low_leaf_idx);
+
+            let new_leaf_hash = hash_leaf(&nullifier_tree_preimages[round + 1]);
+
+            let (new_leaf_proof, new_leaf_proof_helper) =
+                tree.insert_leaf(&mut native_hasher, new_leaf_hash, round + 1);
+
+            let new_root = tree.get_root();
+
+            base_test()
+                .k(19)
+                .lookup_bits(18)
+                .expect_satisfied(true)
+                .run(|ctx, range| {
+                    let gate = range.gate();
+                    let mut hasher =
+                        PoseidonHasher::<Fr, 3, 2>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
+                    hasher.initialize_consts(ctx, gate);
+
+                    let old_root = ctx.load_witness(old_root);
+
+                    let low_leaf = IndexedMerkleTreeLeaf {
+                        val: ctx.load_witness(idx_low_leaf.val),
+                        next_val: ctx.load_witness(idx_low_leaf.next_val),
+                        next_idx: ctx.load_witness(idx_low_leaf.next_idx),
+                    };
+
+                    let low_leaf_proof = low_leaf_proof
+                        .iter()
+                        .map(|x| ctx.load_witness(*x))
+                        .collect::<Vec<_>>();
+
+                    let low_leaf_proof_helper = low_leaf_proof_helper
+                        .iter()
+                        .map(|x| ctx.load_witness(*x))
+                        .collect::<Vec<_>>();
+
+                    let new_root = ctx.load_witness(new_root);
+
+                    let new_leaf = IndexedMerkleTreeLeaf {
+                        val: ctx.load_witness(*new_val),
+                        next_val: ctx.load_witness(nullifier_tree_preimages[round + 1].next_val),
+                        next_idx: ctx.load_witness(nullifier_tree_preimages[round + 1].next_idx),
+                    };
+
+                    let new_leaf_proof = new_leaf_proof
+                        .iter()
+                        .map(|x| ctx.load_witness(*x))
+                        .collect::<Vec<_>>();
+
+                    let new_leaf_proof_helper = new_leaf_proof_helper
+                        .iter()
+                        .map(|x| ctx.load_witness(*x))
+                        .collect::<Vec<_>>();
+
+                    let new_leaf_index = ctx.load_witness(Fr::from((round + 1) as u64));
+
+                    insert_leaf::<Fr, 3, 2>(
+                        ctx,
+                        range,
+                        &hasher,
+                        &old_root,
+                        &low_leaf,
+                        &low_leaf_proof,
+                        &low_leaf_proof_helper,
+                        &new_root,
+                        &new_leaf,
+                        &new_leaf_index,
+                        &new_leaf_proof,
+                        &new_leaf_proof_helper,
+                    )
+                });
         }
-        (nullifier_tree_preimages, low_leaf_idx)
+    }
+
+    fn hash_leaf(leaf: &IMTLeaf<Fr>) -> Fr {
+        const T: usize = 3;
+        const RATE: usize = 2;
+        const R_F: usize = 8;
+        const R_P: usize = 57;
+        let mut native_hasher = Poseidon::<Fr, T, RATE>::new(R_F, R_P);
+        native_hasher.update(&[leaf.val, leaf.next_val, leaf.next_idx]);
+        return native_hasher.squeeze_and_reset();
     }
 
     fn hash_nullifier_pre_images(nullifier_tree_preimages: Vec<IMTLeaf<Fr>>) -> Vec<Fr> {
@@ -674,131 +927,6 @@ mod test {
             println!("val[{}]={:?}", i, x.val);
             println!("nxt_idx[{}]={:?}", i, x.next_idx);
             println!("next_val[{}]={:?}\n", i, x.next_val);
-        }
-    }
-    #[test]
-    fn test_insert_leaf_multiple_round() {
-        let mut native_hasher = Poseidon::<Fr, 3, 2>::new(8, 57);
-
-        let new_vals = [
-            Fr::from(30),
-            Fr::from(10),
-            Fr::from(20),
-            Fr::from(5),
-            Fr::from(50),
-            Fr::from(35),
-        ];
-
-        let mut nullifier_tree_preimages = (0..8)
-            .map(|_| IMTLeaf::<Fr> {
-                val: Fr::from(0u64),
-                next_val: Fr::from(0u64),
-                next_idx: Fr::from(0u64),
-            })
-            .collect::<Vec<_>>();
-
-        let mut old_nullifier_tree_preimages = nullifier_tree_preimages.clone();
-
-        let mut nullifier_tree_leaves = hash_nullifier_pre_images(nullifier_tree_preimages.clone());
-
-        let mut low_leaf_idx = 0;
-
-        let mut tree =
-            IndexedMerkleTree::<Fr, 3, 2>::new(&mut native_hasher, nullifier_tree_leaves.clone())
-                .unwrap();
-
-        for (round, new_val) in new_vals.iter().enumerate() {
-            println!("---------------round[{}]----------------", round);
-            let old_root = tree.get_root();
-
-            (nullifier_tree_preimages, low_leaf_idx) =
-                update_idx_leaf(nullifier_tree_preimages.clone(), *new_val, round as u64 + 1);
-
-            println!("new_val added = {:?}", new_val);
-            print_nullifier_leafs(nullifier_tree_preimages.clone());
-
-            let low_leaf = old_nullifier_tree_preimages[low_leaf_idx].clone();
-
-            let (low_leaf_proof, low_leaf_proof_helper) = tree.get_proof(low_leaf_idx);
-
-            nullifier_tree_leaves = hash_nullifier_pre_images(nullifier_tree_preimages.clone());
-
-            tree = IndexedMerkleTree::<Fr, 3, 2>::new(
-                &mut native_hasher,
-                nullifier_tree_leaves.clone(),
-            )
-            .unwrap();
-
-            let new_leaf = nullifier_tree_preimages[round + 1].clone();
-            let new_leaf_index = Fr::from(round as u64 + 1);
-            let (new_leaf_proof, new_leaf_proof_helper) = tree.get_proof(round + 1);
-            let new_root = tree.get_root();
-            let is_new_leaf_largest = if nullifier_tree_preimages[round + 1].next_val == Fr::zero()
-            {
-                Fr::from(true)
-            } else {
-                Fr::from(false)
-            };
-
-            base_test()
-                .k(19)
-                .lookup_bits(18)
-                .expect_satisfied(true)
-                .run(|ctx, range| {
-                    let gate = range.gate();
-                    let mut hasher =
-                        PoseidonHasher::<Fr, 3, 2>::new(OptimizedPoseidonSpec::new::<8, 57, 0>());
-                    hasher.initialize_consts(ctx, gate);
-
-                    let old_root = ctx.load_witness(old_root);
-                    let low_leaf = IndexedMerkleTreeLeaf {
-                        val: ctx.load_witness(low_leaf.val),
-                        next_val: ctx.load_witness(low_leaf.next_val),
-                        next_idx: ctx.load_witness(low_leaf.next_idx),
-                    };
-                    let new_root = ctx.load_witness(new_root);
-                    let new_leaf = IndexedMerkleTreeLeaf {
-                        val: ctx.load_witness(new_leaf.val),
-                        next_val: ctx.load_witness(new_leaf.next_val),
-                        next_idx: ctx.load_witness(new_leaf.next_idx),
-                    };
-                    let new_leaf_index = ctx.load_witness(new_leaf_index);
-                    let is_new_leaf_largest = ctx.load_witness(is_new_leaf_largest);
-
-                    let low_leaf_proof = low_leaf_proof
-                        .iter()
-                        .map(|x| ctx.load_witness(*x))
-                        .collect::<Vec<_>>();
-                    let low_leaf_proof_helper = low_leaf_proof_helper
-                        .iter()
-                        .map(|x| ctx.load_witness(*x))
-                        .collect::<Vec<_>>();
-                    let new_leaf_proof = new_leaf_proof
-                        .iter()
-                        .map(|x| ctx.load_witness(*x))
-                        .collect::<Vec<_>>();
-                    let new_leaf_proof_helper = new_leaf_proof_helper
-                        .iter()
-                        .map(|x| ctx.load_witness(*x))
-                        .collect::<Vec<_>>();
-
-                    insert_leaf::<Fr, 3, 2>(
-                        ctx,
-                        range,
-                        &hasher,
-                        &old_root,
-                        &low_leaf,
-                        &low_leaf_proof,
-                        &low_leaf_proof_helper,
-                        &new_root,
-                        &new_leaf,
-                        &new_leaf_index,
-                        &new_leaf_proof,
-                        &new_leaf_proof_helper,
-                        &is_new_leaf_largest,
-                    )
-                });
-            old_nullifier_tree_preimages = nullifier_tree_preimages.clone();
         }
     }
 
